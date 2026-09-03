@@ -122,7 +122,11 @@ static void voice_off(MCPXAPUState *d, uint16_t v)
     voice_set_mask(d, v, NV_PAVS_VOICE_PAR_STATE,
                    NV_PAVS_VOICE_PAR_STATE_ACTIVE_VOICE, 0);
 
-    if (d->vp.al_initialized && d->vp.al_sources[v] != 0) {
+    if (d->vp.al_initialized && v < MCPX_HW_MAX_3D_VOICES && d->vp.al_sources[v] != 0) {
+        ALCcontext *ctx = (ALCcontext *)d->monitor.al.context;
+        if (ctx && alcGetCurrentContext() != ctx) {
+            alcMakeContextCurrent(ctx);
+        }
         alSourceStop(d->vp.al_sources[v]);
         alSourcei(d->vp.al_sources[v], AL_BUFFER, 0);
     }
@@ -1488,33 +1492,26 @@ static void voice_process(MCPXAPUState *d,
         }
     }
 
-    if (d->is_5_1_active && !g_config.audio.use_dsp && d->vp.al_initialized) {
-        /* Mode B: DirectSound3D OpenAL HLE Spatializer */
+    if (d->is_5_1_active && !g_config.audio.use_dsp && d->vp.al_initialized &&
+        (v < MCPX_HW_MAX_3D_VOICES)) {
+        /* Mode B: DirectSound3D OpenAL HLE Spatializer (strictly 3D voices 0..63) */
         float x = 0.0f, y = 0.0f, z = -1.0f;
 
-        if (v < MCPX_HW_MAX_3D_VOICES) {
-            uint16_t hrtf_handle =
-                voice_get_mask(d, v, NV_PAVS_VOICE_CFG_HRTF_TARGET,
-                               NV_PAVS_VOICE_CFG_HRTF_TARGET_HANDLE);
-            if (hrtf_handle != HRTF_NULL_HANDLE && hrtf_handle < HRTF_ENTRY_COUNT) {
-                float itd = d->vp.hrtf.entries[hrtf_handle].itd;
-                x = fminf(fmaxf(itd / 42.0f, -1.0f), 1.0f);
-            }
-            float front = attenuate(vol[0]) + attenuate(vol[1]);
-            float rear = attenuate(vol[2]) + attenuate(vol[3]);
-            if (front + rear > 0.0001f) {
-                z = fminf(fmaxf((rear - front) / (front + rear), -1.0f), 1.0f);
-            }
-            if (hrtf_handle == HRTF_NULL_HANDLE || hrtf_handle >= HRTF_ENTRY_COUNT) {
-                float left = attenuate(vol[0]) + attenuate(vol[2]);
-                float right = attenuate(vol[1]) + attenuate(vol[3]);
-                if (left + right > 0.0001f) {
-                    x = fminf(fmaxf((right - left) / (left + right), -1.0f), 1.0f);
-                }
-            }
-        } else {
-            float left = attenuate(vol[0]);
-            float right = attenuate(vol[1]);
+        uint16_t hrtf_handle =
+            voice_get_mask(d, v, NV_PAVS_VOICE_CFG_HRTF_TARGET,
+                           NV_PAVS_VOICE_CFG_HRTF_TARGET_HANDLE);
+        if (hrtf_handle != HRTF_NULL_HANDLE && hrtf_handle < HRTF_ENTRY_COUNT) {
+            float itd = d->vp.hrtf.entries[hrtf_handle].itd;
+            x = fminf(fmaxf(itd / 42.0f, -1.0f), 1.0f);
+        }
+        float front = attenuate(vol[0]) + attenuate(vol[1]);
+        float rear = attenuate(vol[2]) + attenuate(vol[3]);
+        if (front + rear > 0.0001f) {
+            z = fminf(fmaxf((rear - front) / (front + rear), -1.0f), 1.0f);
+        }
+        if (hrtf_handle == HRTF_NULL_HANDLE || hrtf_handle >= HRTF_ENTRY_COUNT) {
+            float left = attenuate(vol[0]) + attenuate(vol[2]);
+            float right = attenuate(vol[1]) + attenuate(vol[3]);
             if (left + right > 0.0001f) {
                 x = fminf(fmaxf((right - left) / (left + right), -1.0f), 1.0f);
             }
@@ -1908,6 +1905,8 @@ void mcpx_apu_vp_al_init(MCPXAPUState *d)
         d->vp.al_sources[v] = 0;
         d->vp.al_buffers[v][0] = 0;
         d->vp.al_buffers[v][1] = 0;
+    }
+    for (int v = 0; v < MCPX_HW_MAX_3D_VOICES; v++) {
         alGenSources(1, &d->vp.al_sources[v]);
         alGenBuffers(2, d->vp.al_buffers[v]);
     }
@@ -1984,14 +1983,14 @@ void mcpx_apu_vp_finalize(MCPXAPUState *d)
         if (ctx && alcGetCurrentContext() != ctx) {
             alcMakeContextCurrent(ctx);
         }
-        for (int v = 0; v < MCPX_HW_MAX_VOICES; v++) {
-            if (d->vp.al_sources[v]) {
+        for (int v = 0; v < MCPX_HW_MAX_3D_VOICES; v++) {
+            if (d->vp.al_sources[v] != 0) {
                 alSourceStop(d->vp.al_sources[v]);
                 alSourcei(d->vp.al_sources[v], AL_BUFFER, 0);
                 alDeleteSources(1, &d->vp.al_sources[v]);
                 d->vp.al_sources[v] = 0;
             }
-            if (d->vp.al_buffers[v][0]) {
+            if (d->vp.al_buffers[v][0] != 0) {
                 alDeleteBuffers(2, d->vp.al_buffers[v]);
                 d->vp.al_buffers[v][0] = 0;
                 d->vp.al_buffers[v][1] = 0;
@@ -2014,8 +2013,12 @@ void mcpx_apu_vp_reset(MCPXAPUState *d)
         hrtf_filter_init(&d->vp.filters[v].hrtf);
     }
     if (d->vp.al_initialized) {
-        for (int v = 0; v < MCPX_HW_MAX_VOICES; v++) {
-            if (d->vp.al_sources[v]) {
+        ALCcontext *ctx = (ALCcontext *)d->monitor.al.context;
+        if (ctx && alcGetCurrentContext() != ctx) {
+            alcMakeContextCurrent(ctx);
+        }
+        for (int v = 0; v < MCPX_HW_MAX_3D_VOICES; v++) {
+            if (d->vp.al_sources[v] != 0) {
                 alSourceStop(d->vp.al_sources[v]);
                 alSourcei(d->vp.al_sources[v], AL_BUFFER, 0);
             }
