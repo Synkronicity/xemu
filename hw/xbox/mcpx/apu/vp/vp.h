@@ -99,11 +99,16 @@ typedef struct {
 
     uint32_t inbuf_sge_handle; //FIXME: Where is this stored?
     uint32_t outbuf_sge_handle; //FIXME: Where is this stored?
+
+    bool al_initialized;
+    uint32_t al_sources[MCPX_HW_MAX_VOICES];
+    uint32_t al_buffers[MCPX_HW_MAX_VOICES][2];
 } MCPXAPUVPState;
 
 extern const MemoryRegionOps vp_ops;
 
 void mcpx_apu_vp_init(MCPXAPUState *d);
+void mcpx_apu_vp_al_init(MCPXAPUState *d);
 void mcpx_apu_vp_finalize(MCPXAPUState *d);
 void mcpx_apu_vp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME]);
 void mcpx_apu_vp_reset(MCPXAPUState *d);

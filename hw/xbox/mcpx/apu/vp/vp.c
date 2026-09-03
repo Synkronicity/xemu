@@ -21,6 +21,8 @@
 
 #include "hw/xbox/mcpx/apu/apu_int.h"
 #include "adpcm.h"
+#include <AL/al.h>
+#include <AL/alc.h>
 
 static const struct {
     hwaddr top, current, next;
@@ -119,6 +121,11 @@ static void voice_off(MCPXAPUState *d, uint16_t v)
 {
     voice_set_mask(d, v, NV_PAVS_VOICE_PAR_STATE,
                    NV_PAVS_VOICE_PAR_STATE_ACTIVE_VOICE, 0);
+
+    if (d->vp.al_initialized && d->vp.al_sources[v] != 0) {
+        alSourceStop(d->vp.al_sources[v]);
+        alSourcei(d->vp.al_sources[v], AL_BUFFER, 0);
+    }
 
     bool stream = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_FMT,
                                  NV_PAVS_VOICE_CFG_FMT_DATA_TYPE);
@@ -1481,7 +1488,89 @@ static void voice_process(MCPXAPUState *d,
         }
     }
 
-    if (d->monitor.point == MCPX_APU_DEBUG_MON_VP) {
+    if (d->is_5_1_active && !g_config.audio.use_dsp && d->vp.al_initialized) {
+        /* Mode B: DirectSound3D OpenAL HLE Spatializer */
+        float x = 0.0f, y = 0.0f, z = -1.0f;
+
+        if (v < MCPX_HW_MAX_3D_VOICES) {
+            uint16_t hrtf_handle =
+                voice_get_mask(d, v, NV_PAVS_VOICE_CFG_HRTF_TARGET,
+                               NV_PAVS_VOICE_CFG_HRTF_TARGET_HANDLE);
+            if (hrtf_handle != HRTF_NULL_HANDLE && hrtf_handle < HRTF_ENTRY_COUNT) {
+                float itd = d->vp.hrtf.entries[hrtf_handle].itd;
+                x = fminf(fmaxf(itd / 42.0f, -1.0f), 1.0f);
+            }
+            float front = attenuate(vol[0]) + attenuate(vol[1]);
+            float rear = attenuate(vol[2]) + attenuate(vol[3]);
+            if (front + rear > 0.0001f) {
+                z = fminf(fmaxf((rear - front) / (front + rear), -1.0f), 1.0f);
+            }
+            if (hrtf_handle == HRTF_NULL_HANDLE || hrtf_handle >= HRTF_ENTRY_COUNT) {
+                float left = attenuate(vol[0]) + attenuate(vol[2]);
+                float right = attenuate(vol[1]) + attenuate(vol[3]);
+                if (left + right > 0.0001f) {
+                    x = fminf(fmaxf((right - left) / (left + right), -1.0f), 1.0f);
+                }
+            }
+        } else {
+            float left = attenuate(vol[0]);
+            float right = attenuate(vol[1]);
+            if (left + right > 0.0001f) {
+                x = fminf(fmaxf((right - left) / (left + right), -1.0f), 1.0f);
+            }
+        }
+
+        ALuint source = d->vp.al_sources[v];
+        if (source != 0) {
+            ALCcontext *ctx = (ALCcontext *)d->monitor.al.context;
+            if (ctx && alcGetCurrentContext() != ctx) {
+                alcMakeContextCurrent(ctx);
+            }
+
+            /* Convert resampled voice samples to 16-bit mono PCM for 3D spatialization */
+            int16_t pcm[NUM_SAMPLES_PER_FRAME];
+            for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+                float s = stereo ? (samples[i][0] + samples[i][1]) * 0.5f : samples[i][0];
+                pcm[i] = (int16_t)fminf(fmaxf(s * ea_value * 32767.0f, -32768.0f), 32767.0f);
+            }
+
+            /* Unqueue processed buffer if any */
+            ALint processed = 0;
+            alGetSourcei(source, AL_BUFFERS_PROCESSED, &processed);
+            ALuint free_buf = 0;
+            if (processed > 0) {
+                alSourceUnqueueBuffers(source, 1, &free_buf);
+            } else {
+                ALint queued = 0;
+                alGetSourcei(source, AL_BUFFERS_QUEUED, &queued);
+                if (queued < 2) {
+                    free_buf = d->vp.al_buffers[v][queued];
+                }
+            }
+
+            if (free_buf != 0) {
+                alBufferData(free_buf, AL_FORMAT_MONO16, pcm, sizeof(pcm), 48000);
+                alSourceQueueBuffers(source, 1, &free_buf);
+            }
+
+            /* Map DirectSound3D coordinates to OpenAL right-handed Cartesian space */
+            alSource3f(source, AL_POSITION, x, y, z);
+            alSource3f(source, AL_VELOCITY, 0.0f, 0.0f, 0.0f);
+
+            float vu = pow(fmax(0.0, fmin(g_config.audio.volume_limit, 1.0)), M_E);
+            alSourcef(source, AL_GAIN, vu);
+
+            ALint state = 0;
+            alGetSourcei(source, AL_SOURCE_STATE, &state);
+            if (state != AL_PLAYING) {
+                ALint queued = 0;
+                alGetSourcei(source, AL_BUFFERS_QUEUED, &queued);
+                if (queued > 0) {
+                    alSourcePlay(source);
+                }
+            }
+        }
+    } else if (d->monitor.point == MCPX_APU_DEBUG_MON_VP) {
         /* For VP mon, simply mix all voices together here, selecting the
          * maximal volume used for any given mixbin as the overall volume for
          * this voice.
@@ -1806,8 +1895,31 @@ static void voice_work_finalize(MCPXAPUState *d)
     vwd->workers = NULL;
 }
 
+void mcpx_apu_vp_al_init(MCPXAPUState *d)
+{
+    if (d->vp.al_initialized || !d->monitor.al.initialized) {
+        return;
+    }
+    ALCcontext *ctx = (ALCcontext *)d->monitor.al.context;
+    if (ctx && alcGetCurrentContext() != ctx) {
+        alcMakeContextCurrent(ctx);
+    }
+    for (int v = 0; v < MCPX_HW_MAX_VOICES; v++) {
+        d->vp.al_sources[v] = 0;
+        d->vp.al_buffers[v][0] = 0;
+        d->vp.al_buffers[v][1] = 0;
+        alGenSources(1, &d->vp.al_sources[v]);
+        alGenBuffers(2, d->vp.al_buffers[v]);
+    }
+    d->vp.al_initialized = (d->vp.al_sources[0] != 0);
+}
+
 void mcpx_apu_vp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME])
 {
+    if (d->is_5_1_active && !g_config.audio.use_dsp && !d->vp.al_initialized) {
+        mcpx_apu_vp_al_init(d);
+    }
+
     memset(d->vp.sample_buf, 0, sizeof(d->vp.sample_buf));
 
     /* Process all voices, mixing each into the affected MIXBINs */
@@ -1859,11 +1971,34 @@ void mcpx_apu_vp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_P
 
 void mcpx_apu_vp_init(MCPXAPUState *d)
 {
+    d->vp.al_initialized = false;
+    memset(d->vp.al_sources, 0, sizeof(d->vp.al_sources));
+    memset(d->vp.al_buffers, 0, sizeof(d->vp.al_buffers));
     voice_work_init(d);
 }
 
 void mcpx_apu_vp_finalize(MCPXAPUState *d)
 {
+    if (d->vp.al_initialized) {
+        ALCcontext *ctx = (ALCcontext *)d->monitor.al.context;
+        if (ctx && alcGetCurrentContext() != ctx) {
+            alcMakeContextCurrent(ctx);
+        }
+        for (int v = 0; v < MCPX_HW_MAX_VOICES; v++) {
+            if (d->vp.al_sources[v]) {
+                alSourceStop(d->vp.al_sources[v]);
+                alSourcei(d->vp.al_sources[v], AL_BUFFER, 0);
+                alDeleteSources(1, &d->vp.al_sources[v]);
+                d->vp.al_sources[v] = 0;
+            }
+            if (d->vp.al_buffers[v][0]) {
+                alDeleteBuffers(2, d->vp.al_buffers[v]);
+                d->vp.al_buffers[v][0] = 0;
+                d->vp.al_buffers[v][1] = 0;
+            }
+        }
+        d->vp.al_initialized = false;
+    }
     voice_work_finalize(d);
 }
 
@@ -1877,5 +2012,13 @@ void mcpx_apu_vp_reset(MCPXAPUState *d)
     memset(d->vp.voice_locked, 0, sizeof(d->vp.voice_locked));
     for (int v = 0; v < ARRAY_SIZE(d->vp.filters); v++) {
         hrtf_filter_init(&d->vp.filters[v].hrtf);
+    }
+    if (d->vp.al_initialized) {
+        for (int v = 0; v < MCPX_HW_MAX_VOICES; v++) {
+            if (d->vp.al_sources[v]) {
+                alSourceStop(d->vp.al_sources[v]);
+                alSourcei(d->vp.al_sources[v], AL_BUFFER, 0);
+            }
+        }
     }
 }
