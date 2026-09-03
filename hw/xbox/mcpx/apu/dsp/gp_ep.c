@@ -423,7 +423,17 @@ static void ep_write(void *opaque, hwaddr addr, uint64_t val, unsigned int size)
         break;
     }
     case NV_PAPU_EPRST:
-        proc_rst_write(d->ep.dsp, d->ep.regs[NV_PAPU_EPRST], val);
+        if ((val & NV_PAPU_GPRST_GPRST) && (val & NV_PAPU_GPRST_GPDSPRST)) {
+            d->is_5_1_active = true;
+        } else {
+            d->is_5_1_active = false;
+        }
+        /* AC-3 Watchdog Stub:
+         * Intercept guest attempt to boot the hardware AC-3 Encode Processor.
+         * We do not call proc_rst_write() to bootstrap the EP DSP core,
+         * preventing unhandled DSP opcode exceptions/fatal asserts.
+         * Store the register value so guest reads reflect the state.
+         */
         d->ep.regs[NV_PAPU_EPRST] = val;
         d->ep_frame_div = 0; /* FIXME: Still unsure about frame sync */
         break;
@@ -451,7 +461,8 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
         }
     }
 
-    bool ep_enabled = (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
+    bool ep_enabled = !d->is_5_1_active &&
+                      (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
                       (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPDSPRST);
 
     /* Run GP */
@@ -479,7 +490,8 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
     }
 
     /* Run EP */
-    if ((d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
+    if (!d->is_5_1_active &&
+        (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
         (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPDSPRST)) {
         if (d->ep_frame_div % 8 == 0) {
             dsp_start_frame(d->ep.dsp);
@@ -495,6 +507,8 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
 
 void mcpx_apu_dsp_init(MCPXAPUState *d)
 {
+    d->is_5_1_active = false;
+
     d->gp.dsp = dsp_init(d, gp_scratch_rw, gp_fifo_rw, true);
     dsp_set_halt_requested(d->gp.dsp, false);
     dsp_set_cycle_count(d->gp.dsp, 0);

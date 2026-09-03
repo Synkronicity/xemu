@@ -93,6 +93,8 @@ typedef struct MCPXAPUState {
     MCPXAPUGPState gp;
     MCPXAPUEPState ep;
 
+    bool is_5_1_active;
+
     uint32_t regs[0x20000];
 
     int ep_frame_div;
