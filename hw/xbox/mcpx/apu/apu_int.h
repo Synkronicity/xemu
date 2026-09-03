@@ -123,6 +123,16 @@ typedef struct MCPXAPUState {
         int16_t surround_buf[256][6];
         SDL_AudioStream *stream;
         int queued_bytes_low, queued_bytes_high;
+
+        struct {
+            bool initialized;
+            void *device;             /* ALCdevice* */
+            void *context;            /* ALCcontext* */
+            uint32_t source;          /* ALuint */
+            uint32_t buffers[4];      /* ALuint[4] */
+            uint32_t free_buffers[4]; /* ALuint[4] free queue */
+            int free_count;
+        } al;
     } monitor;
 } MCPXAPUState;
 

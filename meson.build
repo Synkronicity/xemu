@@ -2436,6 +2436,7 @@ else
 endif
 
 libsamplerate = dependency('samplerate', method: 'pkg-config', required: true)
+openal = dependency('openal', required: true)
 
 imgui_proj = subproject('imgui', required: true,
                          default_options: [

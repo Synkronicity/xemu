@@ -1,4 +1,4 @@
-mcpx_ss.add(sdl, files(
+mcpx_ss.add(sdl, openal, files(
 	'apu.c',
 	'debug.c',
 	'monitor.c',
