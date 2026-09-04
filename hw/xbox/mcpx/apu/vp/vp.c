@@ -122,10 +122,6 @@ static void voice_off(MCPXAPUState *d, uint16_t v)
     voice_set_mask(d, v, NV_PAVS_VOICE_PAR_STATE,
                    NV_PAVS_VOICE_PAR_STATE_ACTIVE_VOICE, 0);
 
-    if (d->vp.al_initialized && v < MCPX_HW_MAX_3D_VOICES && d->vp.al_sources[v] != 0) {
-        alSourceStop(d->vp.al_sources[v]);
-    }
-
     bool stream = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_FMT,
                                  NV_PAVS_VOICE_CFG_FMT_DATA_TYPE);
     int notifier = MCPX_HW_NOTIFIER_SSLA_DONE;
@@ -2015,12 +2011,5 @@ void mcpx_apu_vp_reset(MCPXAPUState *d)
     memset(d->vp.voice_locked, 0, sizeof(d->vp.voice_locked));
     for (int v = 0; v < ARRAY_SIZE(d->vp.filters); v++) {
         hrtf_filter_init(&d->vp.filters[v].hrtf);
-    }
-    if (d->vp.al_initialized) {
-        for (int v = 0; v < MCPX_HW_MAX_3D_VOICES; v++) {
-            if (d->vp.al_sources[v] != 0) {
-                alSourceStop(d->vp.al_sources[v]);
-            }
-        }
     }
 }
