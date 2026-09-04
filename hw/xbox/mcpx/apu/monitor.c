@@ -20,12 +20,14 @@
 #include "apu_int.h"
 #include <math.h>
 
+static SDL_AudioStream *surround_stream = NULL;
+
 void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
 {
     SDL_AudioSpec spec = {
         .freq = 48000,
         .format = SDL_AUDIO_S16LE,
-        .channels = 6,
+        .channels = 2,
     };
 
     d->monitor.stream = NULL;
@@ -53,16 +55,31 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
                           SDL_AUDIO_BYTESIZE(spec.format) *
                           spec.freq / dev_spec.freq;
     }
-    int frame_bytes = NUM_SAMPLES_PER_FRAME * 6 * sizeof(int16_t);
+    int frame_bytes = sizeof(d->monitor.frame_buf);
     int drain = MAX(dev_drain_bytes, frame_bytes);
     d->monitor.queued_bytes_low = drain;
     d->monitor.queued_bytes_high = 3 * drain;
 
     SDL_ResumeAudioDevice(dev);
+
+    SDL_AudioSpec surr_spec = {
+        .freq = 48000,
+        .format = SDL_AUDIO_S16LE,
+        .channels = 6,
+    };
+    surround_stream = SDL_OpenAudioDeviceStream(
+        SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &surr_spec, NULL, NULL);
+    if (surround_stream) {
+        SDL_ResumeAudioDevice(SDL_GetAudioStreamDevice(surround_stream));
+    }
 }
 
 void mcpx_apu_monitor_finalize(MCPXAPUState *d)
 {
+    if (surround_stream) {
+        SDL_DestroyAudioStream(surround_stream);
+        surround_stream = NULL;
+    }
     if (d->monitor.stream) {
         SDL_DestroyAudioStream(d->monitor.stream);
     }
@@ -74,34 +91,44 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
         return;
     }
 
-    int16_t interleaved[6 * NUM_SAMPLES_PER_FRAME];
-
-    if (d->is_5_1_active) {
-        int16_t *planar = (int16_t *)d->monitor.surround_buf;
+    if (d->is_5_1_active && surround_stream) {
+        int16_t interleaved[6 * NUM_SAMPLES_PER_FRAME];
         for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
-            interleaved[i * 6 + 0] = planar[0 * NUM_SAMPLES_PER_FRAME + i]; // FL
-            interleaved[i * 6 + 1] = planar[1 * NUM_SAMPLES_PER_FRAME + i]; // FR
-            interleaved[i * 6 + 2] = planar[2 * NUM_SAMPLES_PER_FRAME + i]; // FC
-            interleaved[i * 6 + 3] = planar[3 * NUM_SAMPLES_PER_FRAME + i]; // LFE
-            interleaved[i * 6 + 4] = planar[4 * NUM_SAMPLES_PER_FRAME + i]; // RL
-            interleaved[i * 6 + 5] = planar[5 * NUM_SAMPLES_PER_FRAME + i]; // RR
+            int32_t fl  = d->monitor.surround_buf[i][0];
+            int32_t fr  = d->monitor.surround_buf[i][1];
+            int32_t fc  = d->monitor.surround_buf[i][2];
+            int32_t lfe = d->monitor.surround_buf[i][3];
+            int32_t rl  = d->monitor.surround_buf[i][4];
+            int32_t rr  = d->monitor.surround_buf[i][5];
+
+            interleaved[i * 6 + 0] = (int16_t)MAX(-32768, MIN(32767, fl));
+            interleaved[i * 6 + 1] = (int16_t)MAX(-32768, MIN(32767, fr));
+            interleaved[i * 6 + 2] = (int16_t)MAX(-32768, MIN(32767, fc));
+            interleaved[i * 6 + 3] = (int16_t)MAX(-32768, MIN(32767, lfe));
+            interleaved[i * 6 + 4] = (int16_t)MAX(-32768, MIN(32767, rl));
+            interleaved[i * 6 + 5] = (int16_t)MAX(-32768, MIN(32767, rr));
+        }
+
+        float vu = pow(fmax(0.0, fmin(g_config.audio.volume_limit, 1.0)), M_E);
+        SDL_SetAudioStreamGain(surround_stream, vu);
+        SDL_PutAudioStreamData(surround_stream, interleaved, sizeof(interleaved));
+
+        /* Mute the primary throttle stream */
+        if (d->monitor.stream) {
+            SDL_SetAudioStreamGain(d->monitor.stream, 0.0f);
+            SDL_PutAudioStreamData(d->monitor.stream, d->monitor.frame_buf,
+                                   sizeof(d->monitor.frame_buf));
         }
     } else {
-        for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
-            interleaved[i * 6 + 0] = d->monitor.frame_buf[i][0]; // FL
-            interleaved[i * 6 + 1] = d->monitor.frame_buf[i][1]; // FR
-            interleaved[i * 6 + 2] = 0;                          // FC
-            interleaved[i * 6 + 3] = 0;                          // LFE
-            interleaved[i * 6 + 4] = 0;                          // RL
-            interleaved[i * 6 + 5] = 0;                          // RR
+        if (surround_stream) {
+            SDL_SetAudioStreamGain(surround_stream, 0.0f);
         }
-    }
-
-    if (d->monitor.stream) {
-        float vu = pow(fmax(0.0, fmin(g_config.audio.volume_limit, 1.0)), M_E);
-        SDL_SetAudioStreamGain(d->monitor.stream, vu);
-        SDL_PutAudioStreamData(d->monitor.stream, interleaved,
-                               sizeof(interleaved));
+        if (d->monitor.stream) {
+            float vu = pow(fmax(0.0, fmin(g_config.audio.volume_limit, 1.0)), M_E);
+            SDL_SetAudioStreamGain(d->monitor.stream, vu);
+            SDL_PutAudioStreamData(d->monitor.stream, d->monitor.frame_buf,
+                                   sizeof(d->monitor.frame_buf));
+        }
     }
 
     memset(d->monitor.frame_buf, 0, sizeof(d->monitor.frame_buf));
