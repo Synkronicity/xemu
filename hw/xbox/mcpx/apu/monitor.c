@@ -201,15 +201,6 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
             }
         }
     } else {
-        /* Stop 5.1 OpenAL source if it was playing */
-        if (al_globally_initialized) {
-            ALint state = 0;
-            alGetSourcei(al_source, AL_SOURCE_STATE, &state);
-            if (state == AL_PLAYING) {
-                alSourceStop(al_source);
-            }
-        }
-
         /* Stereo fallback through standard SDL audio stream */
         if (d->monitor.stream) {
             float vu = pow(fmax(0.0, fmin(g_config.audio.volume_limit, 1.0)), M_E);
