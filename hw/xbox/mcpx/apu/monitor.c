@@ -27,6 +27,7 @@
 #endif
 
 /* Globally static OpenAL components that persist across QEMU machine resets */
+static bool al_init_attempted = false;
 static bool al_globally_initialized = false;
 static ALCdevice *al_dev = NULL;
 static ALCcontext *al_ctx = NULL;
@@ -90,8 +91,9 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
         return;
     }
 
-    /* 1. Global OpenAL initialization (runs once, persists across QEMU machine resets) */
-    if (!al_globally_initialized) {
+    /* 1. Global OpenAL initialization (runs strictly ONCE via latch) */
+    if (!al_init_attempted) {
+        al_init_attempted = true;
         al_dev = alcOpenDevice(NULL);
         if (al_dev) {
             al_ctx = alcCreateContext(al_dev, NULL);
@@ -167,9 +169,20 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
 
         /* Load new 5.1 PCM data into a free buffer and queue it */
         if (al_free_count > 0) {
+            int16_t interleaved[6 * NUM_SAMPLES_PER_FRAME];
+            int16_t *planar = (int16_t *)d->monitor.surround_buf;
+            for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+                interleaved[i * 6 + 0] = planar[0 * NUM_SAMPLES_PER_FRAME + i]; // FL
+                interleaved[i * 6 + 1] = planar[1 * NUM_SAMPLES_PER_FRAME + i]; // FR
+                interleaved[i * 6 + 2] = planar[2 * NUM_SAMPLES_PER_FRAME + i]; // FC
+                interleaved[i * 6 + 3] = planar[3 * NUM_SAMPLES_PER_FRAME + i]; // LFE
+                interleaved[i * 6 + 4] = planar[4 * NUM_SAMPLES_PER_FRAME + i]; // RL
+                interleaved[i * 6 + 5] = planar[5 * NUM_SAMPLES_PER_FRAME + i]; // RR
+            }
+
             ALuint target_buf = al_free_buffers[--al_free_count];
-            alBufferData(target_buf, AL_FORMAT_51CHN16, d->monitor.surround_buf,
-                         sizeof(d->monitor.surround_buf), 48000);
+            alBufferData(target_buf, AL_FORMAT_51CHN16, interleaved,
+                         sizeof(interleaved), 48000);
             alSourceQueueBuffers(al_source, 1, &target_buf);
         }
 
