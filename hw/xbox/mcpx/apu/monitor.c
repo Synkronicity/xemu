@@ -19,29 +19,13 @@
 
 #include "apu_int.h"
 #include <math.h>
-#include <AL/al.h>
-#include <AL/alc.h>
-
-#ifndef AL_FORMAT_51CHN16
-#define AL_FORMAT_51CHN16 0x120B
-#endif
-
-/* Globally static OpenAL components that persist across QEMU machine resets */
-static bool al_init_attempted = false;
-static bool al_globally_initialized = false;
-static ALCdevice *al_dev = NULL;
-static ALCcontext *al_ctx = NULL;
-static ALuint al_source;
-static ALuint al_buffers[4];
-static ALuint al_free_buffers[4];
-static int al_free_count = 0;
 
 void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
 {
     SDL_AudioSpec spec = {
         .freq = 48000,
         .format = SDL_AUDIO_S16LE,
-        .channels = 2,
+        .channels = 6,
     };
 
     d->monitor.stream = NULL;
@@ -69,7 +53,7 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
                           SDL_AUDIO_BYTESIZE(spec.format) *
                           spec.freq / dev_spec.freq;
     }
-    int frame_bytes = sizeof(d->monitor.frame_buf);
+    int frame_bytes = NUM_SAMPLES_PER_FRAME * 6 * sizeof(int16_t);
     int drain = MAX(dev_drain_bytes, frame_bytes);
     d->monitor.queued_bytes_low = drain;
     d->monitor.queued_bytes_high = 3 * drain;
@@ -81,7 +65,6 @@ void mcpx_apu_monitor_finalize(MCPXAPUState *d)
 {
     if (d->monitor.stream) {
         SDL_DestroyAudioStream(d->monitor.stream);
-        d->monitor.stream = NULL;
     }
 }
 
@@ -91,123 +74,34 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
         return;
     }
 
-    /* 1. Global OpenAL initialization (runs strictly ONCE via latch) */
-    if (!al_init_attempted) {
-        al_init_attempted = true;
-        al_dev = alcOpenDevice(NULL);
-        if (al_dev) {
-            al_ctx = alcCreateContext(al_dev, NULL);
-            if (al_ctx && alcMakeContextCurrent(al_ctx)) {
-                alGenSources(1, &al_source);
-                if (alGetError() == AL_NO_ERROR) {
-                    alGenBuffers(4, al_buffers);
-                    if (alGetError() == AL_NO_ERROR) {
-                        for (int i = 0; i < 4; i++) {
-                            al_free_buffers[i] = al_buffers[i];
-                        }
-                        al_free_count = 4;
-                        al_globally_initialized = true;
-                    } else {
-                        alDeleteSources(1, &al_source);
-                        alcMakeContextCurrent(NULL);
-                        alcDestroyContext(al_ctx);
-                        al_ctx = NULL;
-                        alcCloseDevice(al_dev);
-                        al_dev = NULL;
-                    }
-                } else {
-                    alcMakeContextCurrent(NULL);
-                    alcDestroyContext(al_ctx);
-                    al_ctx = NULL;
-                    alcCloseDevice(al_dev);
-                    al_dev = NULL;
-                }
-            } else {
-                if (al_ctx) {
-                    alcDestroyContext(al_ctx);
-                    al_ctx = NULL;
-                }
-                alcCloseDevice(al_dev);
-                al_dev = NULL;
-            }
+    int16_t interleaved[6 * NUM_SAMPLES_PER_FRAME];
+
+    if (d->is_5_1_active) {
+        int16_t *planar = (int16_t *)d->monitor.surround_buf;
+        for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+            interleaved[i * 6 + 0] = planar[0 * NUM_SAMPLES_PER_FRAME + i]; // FL
+            interleaved[i * 6 + 1] = planar[1 * NUM_SAMPLES_PER_FRAME + i]; // FR
+            interleaved[i * 6 + 2] = planar[2 * NUM_SAMPLES_PER_FRAME + i]; // FC
+            interleaved[i * 6 + 3] = planar[3 * NUM_SAMPLES_PER_FRAME + i]; // LFE
+            interleaved[i * 6 + 4] = planar[4 * NUM_SAMPLES_PER_FRAME + i]; // RL
+            interleaved[i * 6 + 5] = planar[5 * NUM_SAMPLES_PER_FRAME + i]; // RR
+        }
+    } else {
+        for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+            interleaved[i * 6 + 0] = d->monitor.frame_buf[i][0]; // FL
+            interleaved[i * 6 + 1] = d->monitor.frame_buf[i][1]; // FR
+            interleaved[i * 6 + 2] = 0;                          // FC
+            interleaved[i * 6 + 3] = 0;                          // LFE
+            interleaved[i * 6 + 4] = 0;                          // RL
+            interleaved[i * 6 + 5] = 0;                          // RR
         }
     }
 
-    /* 2. Mode A: 5.1 Surround Sound LPCM Scraping */
-    if (d->is_5_1_active && al_globally_initialized) {
-        /* Unqueue processed buffers */
-        ALint processed = 0;
-        alGetSourcei(al_source, AL_BUFFERS_PROCESSED, &processed);
-        while (processed > 0) {
-            ALuint unqueued = 0;
-            alSourceUnqueueBuffers(al_source, 1, &unqueued);
-            if (alGetError() == AL_NO_ERROR && unqueued != 0) {
-                if (al_free_count < 4) {
-                    al_free_buffers[al_free_count++] = unqueued;
-                }
-            }
-            processed--;
-        }
-
-        /* If source was stopped with queued buffers, reclaim them */
-        if (al_free_count == 0) {
-            ALint state = 0;
-            alGetSourcei(al_source, AL_SOURCE_STATE, &state);
-            if (state == AL_STOPPED) {
-                ALint queued = 0;
-                alGetSourcei(al_source, AL_BUFFERS_QUEUED, &queued);
-                while (queued > 0) {
-                    ALuint unqueued = 0;
-                    alSourceUnqueueBuffers(al_source, 1, &unqueued);
-                    if (unqueued != 0 && al_free_count < 4) {
-                        al_free_buffers[al_free_count++] = unqueued;
-                    }
-                    queued--;
-                }
-            }
-        }
-
-        /* Load new 5.1 PCM data into a free buffer and queue it */
-        if (al_free_count > 0) {
-            int16_t interleaved[6 * NUM_SAMPLES_PER_FRAME];
-            int16_t *planar = (int16_t *)d->monitor.surround_buf;
-            for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
-                interleaved[i * 6 + 0] = planar[0 * NUM_SAMPLES_PER_FRAME + i]; // FL
-                interleaved[i * 6 + 1] = planar[1 * NUM_SAMPLES_PER_FRAME + i]; // FR
-                interleaved[i * 6 + 2] = planar[2 * NUM_SAMPLES_PER_FRAME + i]; // FC
-                interleaved[i * 6 + 3] = planar[3 * NUM_SAMPLES_PER_FRAME + i]; // LFE
-                interleaved[i * 6 + 4] = planar[4 * NUM_SAMPLES_PER_FRAME + i]; // RL
-                interleaved[i * 6 + 5] = planar[5 * NUM_SAMPLES_PER_FRAME + i]; // RR
-            }
-
-            ALuint target_buf = al_free_buffers[--al_free_count];
-            alBufferData(target_buf, AL_FORMAT_51CHN16, interleaved,
-                         sizeof(interleaved), 48000);
-            alSourceQueueBuffers(al_source, 1, &target_buf);
-        }
-
-        /* Set volume / gain */
+    if (d->monitor.stream) {
         float vu = pow(fmax(0.0, fmin(g_config.audio.volume_limit, 1.0)), M_E);
-        alSourcef(al_source, AL_GAIN, vu);
-
-        /* Handle buffer starvation / underrun: restart playback if stopped */
-        ALint state = 0;
-        alGetSourcei(al_source, AL_SOURCE_STATE, &state);
-        if (state != AL_PLAYING) {
-            ALint queued = 0;
-            alGetSourcei(al_source, AL_BUFFERS_QUEUED, &queued);
-            if (queued > 0) {
-                alSourcePlay(al_source);
-            }
-        }
-    } else {
-        /* Stereo fallback through standard SDL audio stream */
-        if (d->monitor.stream) {
-            float vu = pow(fmax(0.0, fmin(g_config.audio.volume_limit, 1.0)), M_E);
-            SDL_SetAudioStreamGain(d->monitor.stream, vu);
-            SDL_PutAudioStreamData(d->monitor.stream, d->monitor.frame_buf,
-                                   sizeof(d->monitor.frame_buf));
-        }
+        SDL_SetAudioStreamGain(d->monitor.stream, vu);
+        SDL_PutAudioStreamData(d->monitor.stream, interleaved,
+                               sizeof(interleaved));
     }
 
     memset(d->monitor.frame_buf, 0, sizeof(d->monitor.frame_buf));
