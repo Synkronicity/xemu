@@ -21,6 +21,9 @@
 
 #include "hw/xbox/mcpx/apu/apu_int.h"
 
+extern float ext_surround_buf[6][256];
+extern int ext_surround_idx;
+
 static const int16_t ep_silence[256][2] = { 0 };
 
 void mcpx_apu_update_dsp_preference(MCPXAPUState *d)
@@ -510,6 +513,16 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
          * Skip the unimplemented/unstable Encode Processor when 5.1 surround
          * is active, leaving monitor.c to scrape the 5.1 discrete mixbins from GP.
          */
+        for (int ch = 0; ch < 6; ch++) {
+            for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+                if (ext_surround_idx + i < 256) {
+                    ext_surround_buf[ch][ext_surround_idx + i] = mixbins[ch][i];
+                }
+            }
+        }
+        if (ext_surround_idx + NUM_SAMPLES_PER_FRAME <= 256) {
+            ext_surround_idx += NUM_SAMPLES_PER_FRAME;
+        }
         return;
     }
 
