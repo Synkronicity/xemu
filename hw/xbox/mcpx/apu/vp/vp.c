@@ -1487,7 +1487,7 @@ static void voice_process(MCPXAPUState *d,
         }
     }
 
-    if (d->is_5_1_active && !g_config.audio.use_dsp && d->vp.al_initialized &&
+    if (!g_config.audio.use_dsp && d->vp.al_initialized &&
         (v < MCPX_HW_MAX_3D_VOICES)) {
         /* Mode B: DirectSound3D OpenAL HLE Spatializer (strictly 3D voices 0..63) */
         float x = 0.0f, y = 0.0f, z = -1.0f;
@@ -1919,7 +1919,7 @@ void mcpx_apu_vp_al_init(MCPXAPUState *d)
 
 void mcpx_apu_vp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME])
 {
-    if (d->is_5_1_active && !g_config.audio.use_dsp && !d->vp.al_initialized) {
+    if (!g_config.audio.use_dsp && !d->vp.al_initialized) {
         mcpx_apu_vp_al_init(d);
     }
 
