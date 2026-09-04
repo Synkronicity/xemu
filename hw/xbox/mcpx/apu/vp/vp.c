@@ -124,7 +124,6 @@ static void voice_off(MCPXAPUState *d, uint16_t v)
 
     if (d->vp.al_initialized && v < MCPX_HW_MAX_3D_VOICES && d->vp.al_sources[v] != 0) {
         alSourceStop(d->vp.al_sources[v]);
-        alSourcei(d->vp.al_sources[v], AL_BUFFER, 0);
     }
 
     bool stream = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_FMT,
@@ -1563,43 +1562,52 @@ static void voice_process(MCPXAPUState *d,
                 }
             }
         }
-    } else if (d->monitor.point == MCPX_APU_DEBUG_MON_VP) {
-        /* For VP mon, simply mix all voices together here, selecting the
-         * maximal volume used for any given mixbin as the overall volume for
-         * this voice.
-         *
-         * If the current voice belongs to a multipass sub-voice group we must
-         * skip it here to avoid mixing it in twice because the sub-voices are
-         * mixed into the multipass bin and that sub-mix will be mixed in here
-         * later when the destination (i.e. second pass) voice is processed.
-         * TODO: Are the 2D, 3D and MP voice lists merely a DirectSound
-         *       convention? Perhaps hardware doesn't care if e.g. a multipass
-         *       voice is in the 2D or 3D list. On the other hand, MON_VP is
-         *       not how the hardware works anyway so not much point worrying
-         *       about precise emulation here. DirectSound compatibility is
-         *       enough.
-         */
-        int mp_bin = -1;
-        uint16_t mp_dst_voice = 0xFFFF;
-        if (voice_list == NV1BA0_PIO_SET_ANTECEDENT_VOICE_LIST_MP_TOP - 1) {
-            mp_bin = peek_ahead_multipass_bin(d, v, &mp_dst_voice);
-        }
-        dbg->multipass_dst_voice = mp_dst_voice;
-
-        bool debug_isolation =
-            g_dbg_voice_monitor >= 0 && g_dbg_voice_monitor == v;
-        float g = 0.0f;
-        for (int b = 0; b < 8; b++) {
-            if (bin[b] == mp_bin && !debug_isolation) {
-                continue;
+    } else {
+        float left = attenuate(vol[0]);
+        float right = attenuate(vol[1]);
+        if (d->monitor.point == MCPX_APU_DEBUG_MON_VP) {
+            /* For VP mon, simply mix all voices together here, selecting the
+             * maximal volume used for any given mixbin as the overall volume for
+             * this voice.
+             *
+             * If the current voice belongs to a multipass sub-voice group we must
+             * skip it here to avoid mixing it in twice because the sub-voices are
+             * mixed into the multipass bin and that sub-mix will be mixed in here
+             * later when the destination (i.e. second pass) voice is processed.
+             * TODO: Are the 2D, 3D and MP voice lists merely a DirectSound
+             *       convention? Perhaps hardware doesn't care if e.g. a multipass
+             *       voice is in the 2D or 3D list. On the other hand, MON_VP is
+             *       not how the hardware works anyway so not much point worrying
+             *       about precise emulation here. DirectSound compatibility is
+             *       enough.
+             */
+            int mp_bin = -1;
+            uint16_t mp_dst_voice = 0xFFFF;
+            if (voice_list == NV1BA0_PIO_SET_ANTECEDENT_VOICE_LIST_MP_TOP - 1) {
+                mp_bin = peek_ahead_multipass_bin(d, v, &mp_dst_voice);
             }
-            float hr = 1 << d->vp.submix_headroom[bin[b]];
-            g = fmax(g, attenuate(vol[b]) / hr);
-        }
-        g *= ea_value;
-        for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
-            sample_buf[i][0] += g*samples[i][0];
-            sample_buf[i][1] += g*samples[i][1];
+            dbg->multipass_dst_voice = mp_dst_voice;
+
+            bool debug_isolation =
+                g_dbg_voice_monitor >= 0 && g_dbg_voice_monitor == v;
+            float g = 0.0f;
+            for (int b = 0; b < 8; b++) {
+                if (bin[b] == mp_bin && !debug_isolation) {
+                    continue;
+                }
+                float hr = 1 << d->vp.submix_headroom[bin[b]];
+                g = fmax(g, attenuate(vol[b]) / hr);
+            }
+            g *= ea_value;
+            for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+                sample_buf[i][0] += g*samples[i][0];
+                sample_buf[i][1] += g*samples[i][1];
+            }
+        } else {
+            for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+                sample_buf[i][0] += left * ea_value * samples[i][0];
+                sample_buf[i][1] += right * ea_value * samples[i][1];
+            }
         }
     }
 }
@@ -2012,7 +2020,6 @@ void mcpx_apu_vp_reset(MCPXAPUState *d)
         for (int v = 0; v < MCPX_HW_MAX_3D_VOICES; v++) {
             if (d->vp.al_sources[v] != 0) {
                 alSourceStop(d->vp.al_sources[v]);
-                alSourcei(d->vp.al_sources[v], AL_BUFFER, 0);
             }
         }
     }
