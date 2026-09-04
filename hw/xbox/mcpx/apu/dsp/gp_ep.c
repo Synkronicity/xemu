@@ -505,8 +505,15 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
     }
 
     /* Run EP */
-    if (!d->is_5_1_active &&
-        (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
+    if (d->is_5_1_active) {
+        /* AC-3 Encoder Bypass for Mode A:
+         * Skip the unimplemented/unstable Encode Processor when 5.1 surround
+         * is active, leaving monitor.c to scrape the 5.1 discrete mixbins from GP.
+         */
+        return;
+    }
+
+    if ((d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
         (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPDSPRST)) {
         if (d->ep_frame_div % 8 == 0) {
             dsp_start_frame(d->ep.dsp);
