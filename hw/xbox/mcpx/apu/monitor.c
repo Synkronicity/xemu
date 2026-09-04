@@ -18,16 +18,22 @@
  */
 
 #include "apu_int.h"
+#include <math.h>
 #include <AL/al.h>
 #include <AL/alc.h>
-#ifdef __has_include
-#if __has_include(<AL/alext.h>)
-#include <AL/alext.h>
-#endif
-#endif
+
 #ifndef AL_FORMAT_51CHN16
 #define AL_FORMAT_51CHN16 0x120B
 #endif
+
+/* Globally static OpenAL components that persist across QEMU machine resets */
+static bool al_globally_initialized = false;
+static ALCdevice *al_dev = NULL;
+static ALCcontext *al_ctx = NULL;
+static ALuint al_source;
+static ALuint al_buffers[4];
+static ALuint al_free_buffers[4];
+static int al_free_count = 0;
 
 void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
 {
@@ -68,46 +74,6 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
     d->monitor.queued_bytes_high = 3 * drain;
 
     SDL_ResumeAudioDevice(dev);
-
-    /* Initialize OpenAL 5.1 backend */
-    d->monitor.al.initialized = false;
-    ALCdevice *al_dev = alcOpenDevice(NULL);
-    if (al_dev) {
-        ALCcontext *al_ctx = alcCreateContext(al_dev, NULL);
-        if (al_ctx && alcMakeContextCurrent(al_ctx)) {
-            ALuint al_src = 0;
-            alGenSources(1, &al_src);
-            if (alGetError() == AL_NO_ERROR) {
-                ALuint al_bufs[4] = { 0 };
-                alGenBuffers(4, al_bufs);
-                if (alGetError() == AL_NO_ERROR) {
-                    d->monitor.al.device = al_dev;
-                    d->monitor.al.context = al_ctx;
-                    d->monitor.al.source = al_src;
-                    for (int i = 0; i < 4; i++) {
-                        d->monitor.al.buffers[i] = al_bufs[i];
-                        d->monitor.al.free_buffers[i] = al_bufs[i];
-                    }
-                    d->monitor.al.free_count = 4;
-                    d->monitor.al.initialized = true;
-                } else {
-                    alDeleteSources(1, &al_src);
-                    alcMakeContextCurrent(NULL);
-                    alcDestroyContext(al_ctx);
-                    alcCloseDevice(al_dev);
-                }
-            } else {
-                alcMakeContextCurrent(NULL);
-                alcDestroyContext(al_ctx);
-                alcCloseDevice(al_dev);
-            }
-        } else {
-            if (al_ctx) {
-                alcDestroyContext(al_ctx);
-            }
-            alcCloseDevice(al_dev);
-        }
-    }
 }
 
 void mcpx_apu_monitor_finalize(MCPXAPUState *d)
@@ -115,30 +81,6 @@ void mcpx_apu_monitor_finalize(MCPXAPUState *d)
     if (d->monitor.stream) {
         SDL_DestroyAudioStream(d->monitor.stream);
         d->monitor.stream = NULL;
-    }
-
-    if (d->monitor.al.initialized) {
-        ALCcontext *ctx = (ALCcontext *)d->monitor.al.context;
-        ALCdevice *dev = (ALCdevice *)d->monitor.al.device;
-        if (ctx) {
-            alcMakeContextCurrent(ctx);
-            alSourceStop(d->monitor.al.source);
-            alSourcei(d->monitor.al.source, AL_BUFFER, 0);
-
-            ALuint bufs[4];
-            for (int i = 0; i < 4; i++) {
-                bufs[i] = d->monitor.al.buffers[i];
-            }
-            alDeleteBuffers(4, bufs);
-            alDeleteSources(1, &d->monitor.al.source);
-
-            alcMakeContextCurrent(NULL);
-            alcDestroyContext(ctx);
-        }
-        if (dev) {
-            alcCloseDevice(dev);
-        }
-        d->monitor.al.initialized = false;
     }
 }
 
@@ -148,64 +90,119 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
         return;
     }
 
-    if (d->is_5_1_active && d->monitor.al.initialized) {
-        ALCcontext *ctx = (ALCcontext *)d->monitor.al.context;
-        if (alcGetCurrentContext() != ctx) {
-            alcMakeContextCurrent(ctx);
+    /* 1. Global OpenAL initialization (runs once, persists across QEMU machine resets) */
+    if (!al_globally_initialized) {
+        al_dev = alcOpenDevice(NULL);
+        if (al_dev) {
+            al_ctx = alcCreateContext(al_dev, NULL);
+            if (al_ctx && alcMakeContextCurrent(al_ctx)) {
+                alGenSources(1, &al_source);
+                if (alGetError() == AL_NO_ERROR) {
+                    alGenBuffers(4, al_buffers);
+                    if (alGetError() == AL_NO_ERROR) {
+                        for (int i = 0; i < 4; i++) {
+                            al_free_buffers[i] = al_buffers[i];
+                        }
+                        al_free_count = 4;
+                        al_globally_initialized = true;
+                    } else {
+                        alDeleteSources(1, &al_source);
+                        alcMakeContextCurrent(NULL);
+                        alcDestroyContext(al_ctx);
+                        al_ctx = NULL;
+                        alcCloseDevice(al_dev);
+                        al_dev = NULL;
+                    }
+                } else {
+                    alcMakeContextCurrent(NULL);
+                    alcDestroyContext(al_ctx);
+                    al_ctx = NULL;
+                    alcCloseDevice(al_dev);
+                    al_dev = NULL;
+                }
+            } else {
+                if (al_ctx) {
+                    alcDestroyContext(al_ctx);
+                    al_ctx = NULL;
+                }
+                alcCloseDevice(al_dev);
+                al_dev = NULL;
+            }
         }
+    }
 
-        ALuint src = d->monitor.al.source;
-
-        /* Unqueue processed OpenAL buffers */
+    /* 2. Mode A: 5.1 Surround Sound LPCM Scraping */
+    if (d->is_5_1_active && al_globally_initialized) {
+        /* Unqueue processed buffers */
         ALint processed = 0;
-        alGetSourcei(src, AL_BUFFERS_PROCESSED, &processed);
+        alGetSourcei(al_source, AL_BUFFERS_PROCESSED, &processed);
         while (processed > 0) {
             ALuint unqueued = 0;
-            alSourceUnqueueBuffers(src, 1, &unqueued);
+            alSourceUnqueueBuffers(al_source, 1, &unqueued);
             if (alGetError() == AL_NO_ERROR && unqueued != 0) {
-                if (d->monitor.al.free_count < 4) {
-                    d->monitor.al.free_buffers[d->monitor.al.free_count++] = unqueued;
+                if (al_free_count < 4) {
+                    al_free_buffers[al_free_count++] = unqueued;
                 }
             }
             processed--;
         }
 
+        /* If source was stopped with queued buffers, reclaim them */
+        if (al_free_count == 0) {
+            ALint state = 0;
+            alGetSourcei(al_source, AL_SOURCE_STATE, &state);
+            if (state == AL_STOPPED) {
+                ALint queued = 0;
+                alGetSourcei(al_source, AL_BUFFERS_QUEUED, &queued);
+                while (queued > 0) {
+                    ALuint unqueued = 0;
+                    alSourceUnqueueBuffers(al_source, 1, &unqueued);
+                    if (unqueued != 0 && al_free_count < 4) {
+                        al_free_buffers[al_free_count++] = unqueued;
+                    }
+                    queued--;
+                }
+            }
+        }
+
         /* Load new 5.1 PCM data into a free buffer and queue it */
-        if (d->monitor.al.free_count > 0) {
-            ALuint target_buf = d->monitor.al.free_buffers[--d->monitor.al.free_count];
+        if (al_free_count > 0) {
+            ALuint target_buf = al_free_buffers[--al_free_count];
             alBufferData(target_buf, AL_FORMAT_51CHN16, d->monitor.surround_buf,
                          sizeof(d->monitor.surround_buf), 48000);
-            alSourceQueueBuffers(src, 1, &target_buf);
+            alSourceQueueBuffers(al_source, 1, &target_buf);
         }
 
         /* Set volume / gain */
         float vu = pow(fmax(0.0, fmin(g_config.audio.volume_limit, 1.0)), M_E);
-        alSourcef(src, AL_GAIN, vu);
+        alSourcef(al_source, AL_GAIN, vu);
 
         /* Handle buffer starvation / underrun: restart playback if stopped */
         ALint state = 0;
-        alGetSourcei(src, AL_SOURCE_STATE, &state);
+        alGetSourcei(al_source, AL_SOURCE_STATE, &state);
         if (state != AL_PLAYING) {
             ALint queued = 0;
-            alGetSourcei(src, AL_BUFFERS_QUEUED, &queued);
+            alGetSourcei(al_source, AL_BUFFERS_QUEUED, &queued);
             if (queued > 0) {
-                alSourcePlay(src);
+                alSourcePlay(al_source);
             }
         }
     } else {
-        if (d->monitor.al.initialized) {
+        /* Stop 5.1 OpenAL source if it was playing */
+        if (al_globally_initialized) {
             ALint state = 0;
-            alGetSourcei(d->monitor.al.source, AL_SOURCE_STATE, &state);
+            alGetSourcei(al_source, AL_SOURCE_STATE, &state);
             if (state == AL_PLAYING) {
-                alSourceStop(d->monitor.al.source);
+                alSourceStop(al_source);
             }
         }
 
+        /* Stereo fallback through standard SDL audio stream */
         if (d->monitor.stream) {
             float vu = pow(fmax(0.0, fmin(g_config.audio.volume_limit, 1.0)), M_E);
             SDL_SetAudioStreamGain(d->monitor.stream, vu);
             SDL_PutAudioStreamData(d->monitor.stream, d->monitor.frame_buf,
-                                sizeof(d->monitor.frame_buf));
+                                   sizeof(d->monitor.frame_buf));
         }
     }
 
