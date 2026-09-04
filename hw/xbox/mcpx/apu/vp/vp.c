@@ -123,10 +123,6 @@ static void voice_off(MCPXAPUState *d, uint16_t v)
                    NV_PAVS_VOICE_PAR_STATE_ACTIVE_VOICE, 0);
 
     if (d->vp.al_initialized && v < MCPX_HW_MAX_3D_VOICES && d->vp.al_sources[v] != 0) {
-        ALCcontext *ctx = (ALCcontext *)d->monitor.al.context;
-        if (ctx && alcGetCurrentContext() != ctx) {
-            alcMakeContextCurrent(ctx);
-        }
         alSourceStop(d->vp.al_sources[v]);
         alSourcei(d->vp.al_sources[v], AL_BUFFER, 0);
     }
@@ -2013,10 +2009,6 @@ void mcpx_apu_vp_reset(MCPXAPUState *d)
         hrtf_filter_init(&d->vp.filters[v].hrtf);
     }
     if (d->vp.al_initialized) {
-        ALCcontext *ctx = (ALCcontext *)d->monitor.al.context;
-        if (ctx && alcGetCurrentContext() != ctx) {
-            alcMakeContextCurrent(ctx);
-        }
         for (int v = 0; v < MCPX_HW_MAX_3D_VOICES; v++) {
             if (d->vp.al_sources[v] != 0) {
                 alSourceStop(d->vp.al_sources[v]);
