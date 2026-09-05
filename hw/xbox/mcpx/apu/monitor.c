@@ -135,5 +135,4 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
     }
 
     memset(d->monitor.frame_buf, 0, sizeof(d->monitor.frame_buf));
-    memset(d->monitor.surround_buf, 0, sizeof(d->monitor.surround_buf));
 }

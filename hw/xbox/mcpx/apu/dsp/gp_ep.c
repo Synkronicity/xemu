@@ -483,17 +483,10 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
             (d->monitor.point == MCPX_APU_DEBUG_MON_GP_OR_EP && !ep_enabled)) {
             int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
             if (d->is_5_1_active) {
+                /* 5.1 Bypass: Keep QEMU frame_buf silent to prevent overlapping stereo phase issues */
                 for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
-                    for (int ch = 0; ch < 6; ch++) {
-                        uint32_t samp = dsp_read_memory(
-                            d->gp.dsp, 'X', 0x1400 + (ch * 0x20) + i);
-                        d->monitor.surround_buf[off + i][ch] = samp >> 8;
-                    }
-                    /* Mirror channels 0 and 1 into frame_buf for stereo fallback / monitoring */
-                    d->monitor.frame_buf[off + i][0] =
-                        d->monitor.surround_buf[off + i][0];
-                    d->monitor.frame_buf[off + i][1] =
-                        d->monitor.surround_buf[off + i][1];
+                    d->monitor.frame_buf[off + i][0] = 0;
+                    d->monitor.frame_buf[off + i][1] = 0;
                 }
             } else {
                 for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
@@ -543,7 +536,6 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
 void mcpx_apu_dsp_init(MCPXAPUState *d)
 {
     d->is_5_1_active = false;
-    memset(d->monitor.surround_buf, 0, sizeof(d->monitor.surround_buf));
 
     d->gp.dsp = dsp_init(d, gp_scratch_rw, gp_fifo_rw, true);
     dsp_set_halt_requested(d->gp.dsp, false);
