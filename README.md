@@ -7,12 +7,12 @@ The goal of this was to maintain historical preservation and architectural effic
 ## The Problem with the Original Xbox's Stereo Output
 Upstream Xemu relies on QEMU's audio subsystem, which downmixes or locks output to stereo. The original Xbox handled stereo by running hardware 3D voices through Sensaura Transaural Cross-Talk Cancellation (CTC) filters. While innovative for TV speakers, passing these baked-in CTC filters into modern headphones often results in strange imaging, phase cancellation, and muffled center-channel dialogue.
 
-## The Solution: The Dual-Stream SDL3 Architecture
+## The Solution: A Dual-Stream SDL3 Architecture
 This implementation utilizes a dual-stream architecture that respects QEMU's hypervisor clock while simultaneously maintaining a dedicated, multi-channel SDL3 pipeline.
 
 When the Xbox EEPROM is set to Surround + Dolby Digital/AC3 and the Experimental DSP is active, my system stubs and converts the Encode Processor into a conditional watchdog. It mutes the standard QEMU stereo stream and hands control to the new 6-channel SDL3 payload stream. When 5.1 is disabled in the dashboard or a game doesn't support it, the emulator seamlessly falls back to standard Xemu stereo behavior.
 
-### The Routing Matrix:
+### The Routing Matrix
 My system intercepts the floating-point accumulator arrays (mixbins) immediately after the Global Processor finishes its pass, routing the hardware matrix to the SDL3 Interleaved standard:
 
     Mixbin[0] -> Front Left
