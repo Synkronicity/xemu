@@ -96,12 +96,12 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
     if (d->is_5_1_active && surround_stream) {
         int16_t interleaved[6 * 256];
         for (int i = 0; i < 256; i++) {
-            float fl  = ext_surround_buf[0][i] * 0.5f;
-            float fr  = ext_surround_buf[1][i] * 0.5f;
-            float fc  = ext_surround_buf[4][i] * 0.5f;
-            float lfe = ext_surround_buf[5][i] * 0.5f;
-            float rl  = ext_surround_buf[2][i] * 0.5f;
-            float rr  = ext_surround_buf[3][i] * 0.5f;
+            float fl  = ext_surround_buf[0][i] * 0.25f;
+            float fr  = ext_surround_buf[1][i] * 0.25f;
+            float fc  = ext_surround_buf[2][i] * 0.25f;
+            float lfe = ext_surround_buf[3][i] * 0.25f;
+            float rl  = ext_surround_buf[4][i] * 0.25f;
+            float rr  = ext_surround_buf[5][i] * 0.25f;
 
             interleaved[i * 6 + 0] = (int16_t)MAX(-32768.0f, MIN(32767.0f, fl * 32767.0f));
             interleaved[i * 6 + 1] = (int16_t)MAX(-32768.0f, MIN(32767.0f, fr * 32767.0f));
