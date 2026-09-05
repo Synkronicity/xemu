@@ -15,12 +15,12 @@ When the Xbox EEPROM is set to Surround + Dolby Digital/AC3 and the Experimental
 ### The Routing Matrix:
 My system intercepts the floating-point accumulator arrays (mixbins) immediately after the Global Processor finishes its pass, routing the hardware matrix to the SDL3 Interleaved standard:
 
-Mixbin[0] -> Front Left
-Mixbin[1] -> Front Right
-Mixbin[2] -> Center
-Mixbin[3] -> LFE (Subwoofer)
-Mixbin[4] -> Surround Left
-Mixbin[5] -> Surround Right
+    Mixbin[0] -> Front Left
+    Mixbin[1] -> Front Right
+    Mixbin[2] -> Center
+    Mixbin[3] -> LFE (Subwoofer)
+    Mixbin[4] -> Surround Left
+    Mixbin[5] -> Surround Right
 
 ## Major Benefits & Use Cases
 ### 1. Reduced DSP Overhead (Emulator Performance Improvement)
