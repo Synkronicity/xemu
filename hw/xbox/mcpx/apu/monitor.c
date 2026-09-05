@@ -18,7 +18,6 @@
  */
 
 #include "apu_int.h"
-#include <math.h>
 
 static SDL_AudioStream *surround_stream = NULL;
 float ext_surround_buf[6][256];
