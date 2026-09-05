@@ -41,6 +41,7 @@ This initial alpha was rigorously tested within a Windows environment using the 
 
 ## The Dual EEPROM Method
 Because QEMU evaluates hardware flags at boot, you cannot toggle between Stereo and 5.1 on the fly.
+
     1) Boot the Xbox dashboard in Xemu. Set audio to Stereo. Shut down. Navigate to your Xemu data folder and rename eeprom.bin to eeprom.bin.stereo.
     2) Boot the dashboard again. Set audio to Dolby Digital Surround. Shut down. Rename this eeprom.bin to eeprom.bin.surround.
     3) When you want to play a game in 5.1, duplicate eeprom.bin.surround, rename the copy to eeprom.bin, ensure the Experimental DSP is checked in the Xemu settings, and launch.
