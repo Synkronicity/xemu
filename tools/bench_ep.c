@@ -194,6 +194,18 @@ int main(int argc, char *argv[])
         printf("    P:0x%06X = 0x%06X\n", p, dsp56k_read_memory(&core, DSP_SPACE_P, p));
     }
 
+    /* Phase 56: Activate Front Stereo Audio Stream in Host Mailbox */
+    printf("[*] Activating Front Stereo Stream in Host Mailbox (X:0x0BC1 = 0x000300)...\n");
+    dsp56k_write_memory(&core, DSP_SPACE_X, 0x000BC1, 0x000300);
+
+    /* Inject Synthetic 24-bit PCM Audio Test Patterns into Mixbuffer 0x0029A2 */
+    printf("[*] Pre-loading Synthetic PCM test samples into Mixbuffer aperture (X:0x0029A2)...\n");
+    for (uint32_t i = 0; i < 32; i++) {
+        /* Distinctive sine-like or stepped ramp pattern (0x100000, 0x200000, ...) */
+        uint32_t sample = ((i + 1) * 0x040000) & 0x7FFFFF;
+        dsp56k_write_memory(&core, DSP_SPACE_X, 0x0029A2 + i, sample);
+    }
+
     /* Replace indefinite execution loop with frame-monitored runner */
     printf("[*] Beginning Audio Kernel Execution (Target: %d Frames)...\n", TARGET_FRAMES);
 
