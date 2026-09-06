@@ -1097,6 +1097,8 @@ static void dsp_stack_push(dsp_core_t* dsp, uint32_t curpc, uint32_t cursr, uint
     if ((stack_error==0) && (stack & (1<<DSP_SP_SE))) {
         /* Stack full, raise interrupt */
         dsp56k_add_interrupt(dsp, DSP_INTER_STACK_ERROR);
+        fprintf(stderr, "[STACK OVERFLOW WARNING] Attempted dsp_stack_push with stack full at PC 0x%06X (SP=0x%02X)\n",
+                dsp->pc, dsp->registers[DSP_REG_SP]);
         DPRINTF("Dsp: Stack Overflow\n");
         if (dsp->exception_debugging)
             assert(!"dsp stack overflow");
@@ -1124,24 +1126,24 @@ static void dsp_stack_push(dsp_core_t* dsp, uint32_t curpc, uint32_t cursr, uint
 
 static void dsp_stack_pop(dsp_core_t* dsp, uint32_t *newpc, uint32_t *newsr)
 {
+    uint32_t sp = dsp->registers[DSP_REG_SP] & BITMASK(4);
+    if (sp == 0) {
+        fprintf(stderr, "[STACK UNDERFLOW WARNING] Attempted dsp_stack_pop with SP == 0 at PC 0x%06X\n", dsp->pc);
+        if (newpc) *newpc = 0;
+        if (newsr) *newsr = dsp->registers[DSP_REG_SR];
+        return;
+    }
+
     uint32_t stack_error, underflow, stack;
 
     stack_error = dsp->registers[DSP_REG_SP] & (1<<DSP_SP_SE);
     underflow = dsp->registers[DSP_REG_SP] & (1<<DSP_SP_UF);
-    stack = (dsp->registers[DSP_REG_SP] & BITMASK(4)) - 1;
-
-    if ((stack_error==0) && (stack & (1<<DSP_SP_SE))) {
-        /* Stack empty*/
-        dsp56k_add_interrupt(dsp, DSP_INTER_STACK_ERROR);
-        DPRINTF("Dsp: Stack underflow\n");
-        if (dsp->exception_debugging)
-            assert(!"Dsp stack underflow");
-    }
+    stack = sp - 1;
 
     dsp->registers[DSP_REG_SP] = (underflow | stack_error | stack) & BITMASK(6);
     stack &= BITMASK(4);
-    *newpc = dsp->registers[DSP_REG_SSH];
-    *newsr = dsp->registers[DSP_REG_SSL];
+    if (newpc) *newpc = dsp->registers[DSP_REG_SSH];
+    if (newsr) *newsr = dsp->registers[DSP_REG_SSL];
 
     dsp->registers[DSP_REG_SSH] = dsp->stack[0][stack];
     dsp->registers[DSP_REG_SSL] = dsp->stack[1][stack];
