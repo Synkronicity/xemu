@@ -198,16 +198,20 @@ int main(int argc, char *argv[])
         printf("    P:0x%06X = 0x%06X\n", p, dsp56k_read_memory(&core, DSP_SPACE_P, p));
     }
 
-    /* Phase 56: Activate Front Stereo Audio Stream in Host Mailbox */
-    printf("[*] Activating Front Stereo Stream in Host Mailbox (X:0x0BC1 = 0x000300)...\n");
-    dsp56k_write_memory(&core, DSP_SPACE_X, 0x000BC1, 0x000300);
+    /* Phase 58: Activate Full 5.1 Surround Streams in Host Mailbox */
+    printf("[*] Activating 5.1 Surround Streams in Host Mailbox (FL/FR, C/LFE, SL/SR = 0x000300)...\n");
+    dsp56k_write_memory(&core, DSP_SPACE_X, 0x000BC1, 0x000300); /* Front L/R */
+    dsp56k_write_memory(&core, DSP_SPACE_X, 0x000BC2, 0x000300); /* Center / LFE */
+    dsp56k_write_memory(&core, DSP_SPACE_X, 0x000BC3, 0x000300); /* Surround L/R */
 
-    /* Inject Synthetic 24-bit PCM Audio Test Patterns into Mixbuffer 0x0029A2 */
-    printf("[*] Pre-loading Synthetic PCM test samples into Mixbuffer aperture (X:0x0029A2)...\n");
+    /* Pre-load Synthetic 24-bit PCM Audio Test Patterns with Channel Identifiers:
+     * Aperture X:0x0029A2 - Base mixbuffer
+     */
+    printf("[*] Pre-loading Synthetic 5.1 Multichannel PCM into Mixbuffer aperture (X:0x0029A0 - X:0x002A20)...\n");
     for (uint32_t i = 0; i < 32; i++) {
-        /* Distinctive sine-like or stepped ramp pattern (0x100000, 0x200000, ...) */
-        uint32_t sample = ((i + 1) * 0x040000) & 0x7FFFFF;
-        dsp56k_write_memory(&core, DSP_SPACE_X, 0x0029A2 + i, sample);
+        /* Front Channels (FL/FR interleaved): 0x10xxxx / 0x20xxxx */
+        dsp56k_write_memory(&core, DSP_SPACE_X, 0x0029A2 + (i * 2),     0x100000 | (i << 8));
+        dsp56k_write_memory(&core, DSP_SPACE_X, 0x0029A2 + (i * 2) + 1, 0x200000 | (i << 8));
     }
 
     /* Replace indefinite execution loop with frame-monitored runner */
@@ -237,16 +241,26 @@ int main(int argc, char *argv[])
         }
     }
 
-    /* Forensic Memory Inspection: Processed PCM Mixbuffer & AC-3 State */
-    printf("\n[*] =================== POST-TRANSFORM MEMORY MAP ===================\n");
+    /* Forensic Memory Inspection: Full 5.1 Surround Mixbuffers & AC-3 State */
+    printf("\n[*] =================== POST-TRANSFORM 5.1 MEMORY MAP ===================\n");
 
-    printf("\n--- Transformed Synthetic PCM Mixbuffer (X:0x0029A2 - X:0x0029C2) ---\n");
-    for (uint32_t a = 0x0029A2; a <= 0x0029C2; a++) {
-        printf("    X:0x%06X = 0x%06X\n", a, dsp56k_read_memory(&core, DSP_SPACE_X, a));
+    printf("\n--- Primary DMA Input Mixbuffer Aperture (X:0x0029A0 - X:0x0029DF) ---\n");
+    for (uint32_t a = 0x0029A0; a <= 0x0029DF; a += 4) {
+        printf("    X:0x%06X: 0x%06X 0x%06X 0x%06X 0x%06X\n",
+               a,
+               dsp56k_read_memory(&core, DSP_SPACE_X, a),
+               dsp56k_read_memory(&core, DSP_SPACE_X, a + 1),
+               dsp56k_read_memory(&core, DSP_SPACE_X, a + 2),
+               dsp56k_read_memory(&core, DSP_SPACE_X, a + 3));
     }
 
-    printf("\n--- AC-3 Filterbank / Work Registers (X:0x0600 - X:0x063F) ---\n");
-    for (uint32_t x = 0x0600; x <= 0x063F; x += 4) {
+    printf("\n--- Multichannel Stream Mailbox State (X:0x0BC0 - X:0x0BC7) ---\n");
+    for (uint32_t x = 0x0BC0; x <= 0x0BC7; x++) {
+        printf("    X:0x%06X = 0x%06X\n", x, dsp56k_read_memory(&core, DSP_SPACE_X, x));
+    }
+
+    printf("\n--- AC-3 Multichannel Control Registers (X:0x0600 - X:0x061F) ---\n");
+    for (uint32_t x = 0x0600; x <= 0x061F; x += 4) {
         printf("    X:0x%06X: 0x%06X 0x%06X 0x%06X 0x%06X\n",
                x,
                dsp56k_read_memory(&core, DSP_SPACE_X, x),
@@ -254,7 +268,7 @@ int main(int argc, char *argv[])
                dsp56k_read_memory(&core, DSP_SPACE_X, x + 2),
                dsp56k_read_memory(&core, DSP_SPACE_X, x + 3));
     }
-    printf("[*] ==================================================================\n\n");
+    printf("[*] =====================================================================\n\n");
 
     printf("====================================================\n");
     printf("  Execution Summary                                 \n");
