@@ -107,6 +107,12 @@ int main(int argc, char *argv[])
     }
     free(buffer);
 
+    /* Preamble opcode peek: inspect bootstrap vector and jump instructions */
+    printf("[*] Preamble P-RAM Peek (PC 0x000000 - 0x000020):\n");
+    for (uint32_t p = 0; p <= 0x000020; p++) {
+        printf("    P:0x%06X = 0x%06X\n", p, dsp56k_read_memory(&core, DSP_SPACE_P, p));
+    }
+
     /* Execute controlled step loop */
     printf("[*] Beginning execution loop (Limit: %u cycles)...\n", MAX_CYCLES);
 
