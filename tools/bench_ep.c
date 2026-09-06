@@ -10,14 +10,13 @@
 #define DEFAULT_FW_PATH "halo2_dolby.bin"
 #define MAX_CYCLES      50000
 
+static uint32_t dma_control_reg = 0;
+
 static uint32_t bench_read_peripheral(dsp_core_t *core, uint32_t address)
 {
     printf("[PERIPH READ ] Address: 0x%06X (PC: 0x%06X)\n", address, core->pc);
 
-    /* HI08 Host Status Register (0xFFFFC5):
-     * The DSP waits for Bit 1 to be asserted by the host to confirm handshake.
-     * Allow 8 poll cycles to elapse so accumulator A increments, then return Bit 1 set (0x02).
-     */
+    /* HI08 Host Status Register (0xFFFFC5): Handshake bit 1 */
     if (address == 0xFFFFC5) {
         static int c5_poll_count = 0;
         c5_poll_count++;
@@ -28,6 +27,19 @@ static uint32_t bench_read_peripheral(dsp_core_t *core, uint32_t address)
         return 0x000000;
     }
 
+    /* DMA Status / Control Register (0xFFFFD6):
+     * When polled after a trigger, assert Bit 4 (0x10) to indicate DMA transfer completed.
+     */
+    if (address == 0xFFFFD6) {
+        /* Return Transfer Complete (Bit 4 set) + preserve active status */
+        return dma_control_reg | 0x000010;
+    }
+
+    /* ESSI0 Status Register (0xFFFFB3): Return Transmitter Empty / Ready (Bit 2 & 3 set) */
+    if (address == 0xFFFFB3) {
+        return 0x00000C;
+    }
+
     return 0x000000;
 }
 
@@ -35,6 +47,10 @@ static void bench_write_peripheral(dsp_core_t *core, uint32_t address, uint32_t 
 {
     printf("[PERIPH WRITE] Address: 0x%06X -> Value: 0x%06X (PC: 0x%06X, Cycle: %u)\n",
            address, value & 0xFFFFFF, core->pc, core->cycle_count);
+
+    if (address == 0xFFFFD6) {
+        dma_control_reg = value & 0xFFFFFF;
+    }
 }
 
 int main(int argc, char *argv[])
