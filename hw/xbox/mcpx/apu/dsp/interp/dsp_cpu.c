@@ -180,7 +180,7 @@ static const OpcodeEntry nonparallel_opcodes[] = {
     { "0000110011pppppp0S0bbbbb", "brclr #n, [X or Y]:pp, xxxx", dis_brclr_pp, emu_brclr_pp },
     { "0000010010qqqqqq0S0bbbbb", "brclr #n, [X or Y]:qq, xxxx", NULL, NULL },
     { "0000110011DDDDDD100bbbbb", "brclr #n, S, xxxx", dis_brclr_reg, emu_brclr_reg },
-    { "00000000000000100001CCCC", "brkcc", NULL, NULL },
+    { "000000000000CCCC00001001", "brkcc", NULL, emu_brk_cc },
     { "0000110010MMMRRR0S1bbbbb", "brset #n, [X or Y]:ea, xxxx", NULL, NULL, match_MMMRRR },
     { "0000110010aaaaaa1S1bbbbb", "brset #n, [X or Y]:aa, xxxx", NULL, NULL },
     { "0000110011pppppp0S1bbbbb", "brset #n, [X or Y]:pp, xxxx", dis_brset_pp, emu_brset_pp },
@@ -225,7 +225,7 @@ static const OpcodeEntry nonparallel_opcodes[] = {
     { "0000011000aaaaaa0S000000", "do [X or Y]:aa, expr", dis_do_aa, emu_do_aa },
     { "00000110iiiiiiii1000hhhh", "do #xxx, expr", dis_do_imm, emu_do_imm },
     { "0000011011DDDDDD00000000", "do S, expr", dis_do_reg, emu_do_reg },
-    { "000000000000001000000011", "do_f", NULL, NULL },
+    { "000000000000000100000000", "do forever, expr", NULL, emu_do_forever },
     { "0000011001MMMRRR0S010000", "dor [X or Y]:ea, label", NULL, NULL, match_MMMRRR },
     { "0000011000aaaaaa0S010000", "dor [X or Y]:aa, label", NULL, NULL },
     { "00000110iiiiiiii1001hhhh", "dor #xxx, label", dis_dor_imm, emu_dor_imm },
@@ -709,24 +709,29 @@ static void dsp_postexecute_update_pc(dsp_core_t* dsp)
 
     /* When running a DO loop, we test the end of loop with the */
     /* updated PC, pointing to last instruction of the loop */
-    if (dsp->registers[DSP_REG_SR] & (1<<DSP_SR_LF)) {
-
+    if (dsp->registers[DSP_REG_SR] & (1 << DSP_SR_LF)) {
         /* Did we execute the last instruction in loop ? */
         if (dsp->pc == dsp->registers[DSP_REG_LA] + 1) {
-            --dsp->registers[DSP_REG_LC];
-            dsp->registers[DSP_REG_LC] &= BITMASK(16);
-
-            if (dsp->registers[DSP_REG_LC] == 0) {
-                /* end of loop */
-                uint32_t saved_pc, saved_sr;
-
-                dsp_stack_pop(dsp, &saved_pc, &saved_sr);
-                dsp->registers[DSP_REG_SR] &= 0x7f;
-                dsp->registers[DSP_REG_SR] |= saved_sr & (1<<DSP_SR_LF);
-                dsp_stack_pop(dsp, &dsp->registers[DSP_REG_LA], &dsp->registers[DSP_REG_LC]);
-            } else {
-                /* Loop one more time */
+            /* Check if this is an infinite DO FOREVER loop */
+            if (dsp->registers[DSP_REG_SR] & (1 << DSP_SR_FV)) {
+                /* Loop indefinitely back to loop start (SSH) without decrementing LC */
                 dsp->pc = dsp->registers[DSP_REG_SSH];
+            } else {
+                --dsp->registers[DSP_REG_LC];
+                dsp->registers[DSP_REG_LC] &= BITMASK(16);
+
+                if (dsp->registers[DSP_REG_LC] == 0) {
+                    /* end of loop */
+                    uint32_t saved_pc, saved_sr;
+
+                    dsp_stack_pop(dsp, &saved_pc, &saved_sr);
+                    dsp->registers[DSP_REG_SR] &= 0x7f;
+                    dsp->registers[DSP_REG_SR] |= saved_sr & ((1 << DSP_SR_LF) | (1 << DSP_SR_FV));
+                    dsp_stack_pop(dsp, &dsp->registers[DSP_REG_LA], &dsp->registers[DSP_REG_LC]);
+                } else {
+                    /* Loop one more time */
+                    dsp->pc = dsp->registers[DSP_REG_SSH];
+                }
             }
         }
     }
