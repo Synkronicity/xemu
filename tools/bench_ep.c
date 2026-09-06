@@ -52,20 +52,25 @@ static uint32_t bench_read_peripheral(dsp_core_t *core, uint32_t address)
     return 0x000000;
 }
 
+static uint32_t dma_src_addr = 0;
+static uint32_t dma_dst_addr = 0;
+
 static void bench_write_peripheral(dsp_core_t *core, uint32_t address, uint32_t value)
 {
-    printf("[PERIPH WRITE] Address: 0x%06X -> Value: 0x%06X (PC: 0x%06X, Cycle: %u)\n",
-           address, value & 0xFFFFFF, core->pc, core->cycle_count);
-
-    if (address == 0xFFFFC5) {
-        hi08_c5_reg = value & 0xFFFFFF;
-    }
+    if (address == 0xFFFFD5) dma_src_addr = value & 0xFFFFFF;
+    if (address == 0xFFFFD4) dma_dst_addr = value & 0xFFFFFF;
 
     if (address == 0xFFFFD6) {
         dma_control_reg = value & 0xFFFFFF;
         if (value & 0x01) {
             dma_transfer_countdown = 2;
+            printf("[DMA TRIGGER] Src: 0x%06X -> Dst: 0x%06X | Ctrl: 0x%06X (PC: 0x%06X, Cycle: %" PRIu64 ")\n",
+                   dma_src_addr, dma_dst_addr, dma_control_reg, core->pc, (uint64_t)core->cycle_count);
         }
+    }
+
+    if (address == 0xFFFFC5) {
+        hi08_c5_reg = value & 0xFFFFFF;
     }
 }
 
@@ -204,14 +209,20 @@ int main(int argc, char *argv[])
     dsp56k_write_memory(&core, DSP_SPACE_X, 0x000BC2, 0x000300); /* Center / LFE */
     dsp56k_write_memory(&core, DSP_SPACE_X, 0x000BC3, 0x000300); /* Surround L/R */
 
-    /* Pre-load Synthetic 24-bit PCM Audio Test Patterns with Channel Identifiers:
-     * Aperture X:0x0029A2 - Base mixbuffer
-     */
-    printf("[*] Pre-loading Synthetic 5.1 Multichannel PCM into Mixbuffer aperture (X:0x0029A0 - X:0x002A20)...\n");
+    /* Phase 59: Pre-load Distinct Signatures for All 6 Discrete Audio Channels */
+    printf("[*] Pre-loading 6-Channel Synthetic PCM Signatures into Apertures...\n");
     for (uint32_t i = 0; i < 32; i++) {
-        /* Front Channels (FL/FR interleaved): 0x10xxxx / 0x20xxxx */
-        dsp56k_write_memory(&core, DSP_SPACE_X, 0x0029A2 + (i * 2),     0x100000 | (i << 8));
-        dsp56k_write_memory(&core, DSP_SPACE_X, 0x0029A2 + (i * 2) + 1, 0x200000 | (i << 8));
+        /* Pair 0: Front Left (0x11xxxx) & Front Right (0x22xxxx) at 0x0029A2 */
+        dsp56k_write_memory(&core, DSP_SPACE_X, 0x0029A2 + (i * 2),     0x110000 | (i << 8));
+        dsp56k_write_memory(&core, DSP_SPACE_X, 0x0029A2 + (i * 2) + 1, 0x220000 | (i << 8));
+
+        /* Pair 1: Center (0x33xxxx) & LFE Subwoofer (0x44xxxx) at 0x002AA2 (Offset +0x100) */
+        dsp56k_write_memory(&core, DSP_SPACE_X, 0x002AA2 + (i * 2),     0x330000 | (i << 8));
+        dsp56k_write_memory(&core, DSP_SPACE_X, 0x002AA2 + (i * 2) + 1, 0x440000 | (i << 8));
+
+        /* Pair 2: Surround Left (0x55xxxx) & Surround Right (0x66xxxx) at 0x002BA2 (Offset +0x200) */
+        dsp56k_write_memory(&core, DSP_SPACE_X, 0x002BA2 + (i * 2),     0x550000 | (i << 8));
+        dsp56k_write_memory(&core, DSP_SPACE_X, 0x002BA2 + (i * 2) + 1, 0x660000 | (i << 8));
     }
 
     /* Replace indefinite execution loop with frame-monitored runner */
@@ -241,26 +252,28 @@ int main(int argc, char *argv[])
         }
     }
 
-    /* Forensic Memory Inspection: Full 5.1 Surround Mixbuffers & AC-3 State */
     printf("\n[*] =================== POST-TRANSFORM 5.1 MEMORY MAP ===================\n");
 
-    printf("\n--- Primary DMA Input Mixbuffer Aperture (X:0x0029A0 - X:0x0029DF) ---\n");
-    for (uint32_t a = 0x0029A0; a <= 0x0029DF; a += 4) {
-        printf("    X:0x%06X: 0x%06X 0x%06X 0x%06X 0x%06X\n",
-               a,
-               dsp56k_read_memory(&core, DSP_SPACE_X, a),
-               dsp56k_read_memory(&core, DSP_SPACE_X, a + 1),
-               dsp56k_read_memory(&core, DSP_SPACE_X, a + 2),
-               dsp56k_read_memory(&core, DSP_SPACE_X, a + 3));
+    printf("\n--- FL/FR Input Aperture (X:0x0029A2 - X:0x0029C1) ---\n");
+    for (uint32_t a = 0x0029A2; a <= 0x0029C1; a += 2) {
+        printf("    X:0x%06X = FL: 0x%06X | FR: 0x%06X\n",
+               a, dsp56k_read_memory(&core, DSP_SPACE_X, a), dsp56k_read_memory(&core, DSP_SPACE_X, a + 1));
     }
 
-    printf("\n--- Multichannel Stream Mailbox State (X:0x0BC0 - X:0x0BC7) ---\n");
-    for (uint32_t x = 0x0BC0; x <= 0x0BC7; x++) {
-        printf("    X:0x%06X = 0x%06X\n", x, dsp56k_read_memory(&core, DSP_SPACE_X, x));
+    printf("\n--- C/LFE Input Aperture (X:0x002AA2 - X:0x002AC1) ---\n");
+    for (uint32_t a = 0x002AA2; a <= 0x002AC1; a += 2) {
+        printf("    X:0x%06X = C:  0x%06X | LFE: 0x%06X\n",
+               a, dsp56k_read_memory(&core, DSP_SPACE_X, a), dsp56k_read_memory(&core, DSP_SPACE_X, a + 1));
     }
 
-    printf("\n--- AC-3 Multichannel Control Registers (X:0x0600 - X:0x061F) ---\n");
-    for (uint32_t x = 0x0600; x <= 0x061F; x += 4) {
+    printf("\n--- SL/SR Input Aperture (X:0x002BA2 - X:0x002BC1) ---\n");
+    for (uint32_t a = 0x002BA2; a <= 0x002BC1; a += 2) {
+        printf("    X:0x%06X = SL: 0x%06X | SR:  0x%06X\n",
+               a, dsp56k_read_memory(&core, DSP_SPACE_X, a), dsp56k_read_memory(&core, DSP_SPACE_X, a + 1));
+    }
+
+    printf("\n--- Mixer Accumulator / Staging Buffer (X:0x0670 - X:0x069F) ---\n");
+    for (uint32_t x = 0x0670; x <= 0x069F; x += 4) {
         printf("    X:0x%06X: 0x%06X 0x%06X 0x%06X 0x%06X\n",
                x,
                dsp56k_read_memory(&core, DSP_SPACE_X, x),
