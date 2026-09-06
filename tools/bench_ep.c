@@ -3,12 +3,13 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include <inttypes.h>
 
 #include "hw/xbox/mcpx/apu/dsp/interp/dsp_cpu.h"
 #include "hw/xbox/mcpx/apu/dsp/interp/dsp_cpu_regs.h"
 
 #define DEFAULT_FW_PATH "halo2_dolby.bin"
-#define MAX_CYCLES      50000
+#define TARGET_FRAMES   5
 
 static uint32_t dma_control_reg = 0;
 static int dma_transfer_countdown = -1;
@@ -193,43 +194,40 @@ int main(int argc, char *argv[])
         printf("    P:0x%06X = 0x%06X\n", p, dsp56k_read_memory(&core, DSP_SPACE_P, p));
     }
 
-    /* Execute controlled step loop */
-    printf("[*] Beginning execution loop (Limit: %u cycles)...\n", MAX_CYCLES);
+    /* Replace indefinite execution loop with frame-monitored runner */
+    printf("[*] Beginning Audio Kernel Execution (Target: %d Frames)...\n", TARGET_FRAMES);
 
-    uint32_t prev_pc = core.pc;
-    uint32_t stall_count = 0;
+    uint32_t last_frame_count = 0;
+    uint32_t total_instructions = 0;
 
-    for (uint32_t step = 0; step < MAX_CYCLES; step++) {
-        prev_pc = core.pc;
-
+    while (total_instructions < 100000) {
         dsp56k_execute_instruction(&core);
+        total_instructions++;
 
-        if (core.pc == prev_pc) {
-            stall_count++;
-            if (stall_count == 1) {
-                printf("[!] DSP entered self-loop / idle at PC: 0x%06X (Step: %u)\n", core.pc, step);
-            }
-            if (stall_count >= 100) {
-                printf("[!] Halting execution: DSP remained stalled at PC 0x%06X for 100 iterations.\n", core.pc);
+        /* Monitor Master Audio Frame Counter at P:$0007 */
+        uint32_t current_frame = dsp56k_read_memory(&core, DSP_SPACE_P, 0x0007);
+        if (current_frame != last_frame_count) {
+            uint32_t ping_pong = dsp56k_read_memory(&core, DSP_SPACE_P, 0x0116);
+            printf("\n>>> [AUDIO FRAME %u COMPLETED] Cycle: %" PRIu64 " | Buffer State P:$0116: 0x%06X | DMA Addr: 0x%06X <<<\n\n",
+                   current_frame, (uint64_t)core.cycle_count, ping_pong, dma_control_reg);
+            last_frame_count = current_frame;
+
+            if (current_frame >= TARGET_FRAMES) {
+                printf("[+] Target frame count (%u) reached cleanly. Halting execution.\n", TARGET_FRAMES);
                 break;
             }
-        } else {
-            stall_count = 0;
-        }
-
-        if (core.is_idle) {
-            printf("[*] DSP asserted idle state at PC: 0x%06X (Step: %u)\n", core.pc, step);
-            break;
         }
     }
 
     printf("====================================================\n");
     printf("  Execution Summary                                 \n");
     printf("====================================================\n");
-    printf("  Final PC         : 0x%06X\n", core.pc);
-    printf("  Total Cycles     : %u\n", core.cycle_count);
-    printf("  Halt Requested   : %s\n", core.is_idle ? "true" : "false");
-    printf("  Is Idle          : %s\n", core.is_idle ? "true" : "false");
+    printf("  Final PC             : 0x%06X\n", core.pc);
+    printf("  Total Instructions   : %u\n", total_instructions);
+    printf("  Total Cycles         : %u\n", core.cycle_count);
+    printf("  Frames Completed     : %u\n", last_frame_count);
+    printf("  Halt Requested       : %s\n", core.is_idle ? "true" : "false");
+    printf("  Is Idle              : %s\n", core.is_idle ? "true" : "false");
     printf("====================================================\n");
 
     return 0;
