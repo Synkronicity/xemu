@@ -33,6 +33,10 @@ int main(int argc, char *argv[])
     printf("[*] Target Firmware: %s\n", fw_path);
 
     FILE *f = fopen(fw_path, "rb");
+    if (!f && argc <= 1) {
+        fw_path = "tools/halo2_dolby.bin";
+        f = fopen(fw_path, "rb");
+    }
     if (!f) {
         fprintf(stderr, "[-] FATAL: Cannot open firmware file '%s'\n", fw_path);
         return 1;
