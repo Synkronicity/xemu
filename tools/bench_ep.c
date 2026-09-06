@@ -12,14 +12,28 @@
 
 static uint32_t bench_read_peripheral(dsp_core_t *core, uint32_t address)
 {
-    printf("[PERIPH READ ] Address: 0x%04X (PC: 0x%06X)\n", address, core->pc);
-    /* By default, return 0 (or default HI08 register state if requested) */
-    return 0;
+    printf("[PERIPH READ ] Address: 0x%06X (PC: 0x%06X)\n", address, core->pc);
+
+    /* HI08 Host Status Register (0xFFFFC5):
+     * The DSP waits for Bit 1 to be asserted by the host to confirm handshake.
+     * Allow 8 poll cycles to elapse so accumulator A increments, then return Bit 1 set (0x02).
+     */
+    if (address == 0xFFFFC5) {
+        static int c5_poll_count = 0;
+        c5_poll_count++;
+        if (c5_poll_count > 8) {
+            printf("[HOST MOCK] Acknowledging DSP Handshake on 0xFFFFC5 (Bit 1 set) at poll #%d\n", c5_poll_count);
+            return 0x000002;
+        }
+        return 0x000000;
+    }
+
+    return 0x000000;
 }
 
 static void bench_write_peripheral(dsp_core_t *core, uint32_t address, uint32_t value)
 {
-    printf("[PERIPH WRITE] Address: 0x%04X -> Value: 0x%06X (PC: 0x%06X, Cycle: %u)\n",
+    printf("[PERIPH WRITE] Address: 0x%06X -> Value: 0x%06X (PC: 0x%06X, Cycle: %u)\n",
            address, value & 0xFFFFFF, core->pc, core->cycle_count);
 }
 
