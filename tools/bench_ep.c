@@ -87,29 +87,64 @@ int main(int argc, char *argv[])
     dsp56k_reset_cpu(&core);
     printf("[+] DSP Core Reset Complete. Initial PC: 0x%06X\n", core.pc);
 
-    /* Flash P-RAM: 
-     * If packed as DWORDs where every 4th byte is 00 padding,
-     * inject word-by-word into P-RAM.
-     */
-    uint32_t words_to_load = fw_size / 4;
-    if (words_to_load > DSP_PRAM_SIZE) {
-        printf("[!] WARNING: Payload words (%u) exceed DSP_PRAM_SIZE (%u). Clamping load.\n",
-               words_to_load, DSP_PRAM_SIZE);
-        words_to_load = DSP_PRAM_SIZE;
+    /* Zero out all P-RAM first */
+    for (uint32_t addr = 0; addr < DSP_PRAM_SIZE; addr++) {
+        dsp56k_write_memory(&core, DSP_SPACE_P, addr, 0x000000);
     }
 
-    printf("[*] Flashing %u words into DSP Program RAM (DSP_SPACE_P)...\n", words_to_load);
-    for (uint32_t addr = 0; addr < words_to_load; addr++) {
-        uint32_t word = (uint32_t)buffer[addr * 4] |
-                        ((uint32_t)buffer[addr * 4 + 1] << 8) |
-                        ((uint32_t)buffer[addr * 4 + 2] << 16);
-        dsp56k_write_memory(&core, DSP_SPACE_P, addr, word);
+    /* Segment 1: Boot vectors & hardware init
+     * Source: File offset 0x0000
+     * Size: 0x320 bytes (200 words)
+     * Target: P:0x0000
+     */
+    uint32_t seg1_words = 0x320 / 4;
+    printf("[*] Loading Segment 1: 0x%X words to P:0x0000...\n", seg1_words);
+    for (uint32_t i = 0; i < seg1_words; i++) {
+        uint32_t word = (uint32_t)buffer[i * 4] |
+                        ((uint32_t)buffer[i * 4 + 1] << 8) |
+                        ((uint32_t)buffer[i * 4 + 2] << 16);
+        dsp56k_write_memory(&core, DSP_SPACE_P, 0x0000 + i, word);
+    }
+
+    /* Segment 2: Main processing kernel
+     * Source: File offset 0x0320
+     * Size: 0x5FC bytes (383 words)
+     * Target: P:0x0180 (byte offset 0x600)
+     */
+    uint32_t seg2_offset = 0x320;
+    uint32_t seg2_words = 0x5FC / 4;
+    printf("[*] Loading Segment 2: 0x%X words to P:0x0180...\n", seg2_words);
+    for (uint32_t i = 0; i < seg2_words; i++) {
+        uint32_t file_idx = seg2_offset + (i * 4);
+        uint32_t word = (uint32_t)buffer[file_idx] |
+                        ((uint32_t)buffer[file_idx + 1] << 8) |
+                        ((uint32_t)buffer[file_idx + 2] << 16);
+        dsp56k_write_memory(&core, DSP_SPACE_P, 0x0180 + i, word);
+    }
+
+    /* Remaining segments (contiguous starting from P:0x0300) */
+    uint32_t tail_offset = 0x320 + 0x5FC; // 0x91C
+    if (fw_size > tail_offset) {
+        uint32_t tail_words = (fw_size - tail_offset) / 4;
+        printf("[*] Loading Tail Segments: 0x%X words to P:0x0300...\n", tail_words);
+        for (uint32_t i = 0; i < tail_words; i++) {
+            if ((0x0300 + i) >= DSP_PRAM_SIZE) break;
+            uint32_t file_idx = tail_offset + (i * 4);
+            uint32_t word = (uint32_t)buffer[file_idx] |
+                            ((uint32_t)buffer[file_idx + 1] << 8) |
+                            ((uint32_t)buffer[file_idx + 2] << 16);
+            dsp56k_write_memory(&core, DSP_SPACE_P, 0x0300 + i, word);
+        }
     }
     free(buffer);
 
     /* Preamble opcode peek: inspect bootstrap vector and jump instructions */
-    printf("[*] Preamble P-RAM Peek (PC 0x000000 - 0x000020):\n");
-    for (uint32_t p = 0; p <= 0x000020; p++) {
+    printf("[*] Preamble P-RAM Peek (PC 0x000000 - 0x000025):\n");
+    for (uint32_t p = 0; p <= 0x000025; p++) {
+        printf("    P:0x%06X = 0x%06X\n", p, dsp56k_read_memory(&core, DSP_SPACE_P, p));
+    }
+    printf("[*] Segment 2 Entry Peek (PC 0x000180 - 0x000190):\n");
+    for (uint32_t p = 0x000180; p <= 0x000190; p++) {
         printf("    P:0x%06X = 0x%06X\n", p, dsp56k_read_memory(&core, DSP_SPACE_P, p));
     }
 

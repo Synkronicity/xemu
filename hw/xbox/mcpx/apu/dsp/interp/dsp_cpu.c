@@ -31,7 +31,9 @@
 
 #define BITMASK(x)  ((1<<(x))-1)
 
+#ifndef TRACE_DSP_DISASM
 #define TRACE_DSP_DISASM 0
+#endif
 #define TRACE_DSP_DISASM_REG 0
 #define TRACE_DSP_DISASM_MEM 0
 
