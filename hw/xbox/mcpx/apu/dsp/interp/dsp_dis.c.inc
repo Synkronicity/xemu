@@ -765,6 +765,34 @@ static void dis_cmpu(dsp_core_t* dsp) {
     sprintf(dsp->disasm_str_instr, "cmpu %s,%s", registers_name[srcreg], registers_name[srcacc]);
 }
 
+static void dis_extractu(dsp_core_t* dsp)
+{
+    uint32_t op = dsp->disasm_cur_inst;
+    int dest_reg = op & 1;
+    int src_reg  = (op >> 4) & 1;
+
+    uint32_t co = read_memory_p(dsp, dsp->pc + 1);
+    uint32_t width  = (co >> 12) & 0x3F;
+    uint32_t offset = co & 0x3F;
+
+    if ((width == 0 && offset == 0 && (co & 0xFF0000) != 0) || (co & 0xFC0FC0) != 0) {
+        width  = (op >> 10) & 0x3F;
+        offset = (op >> 4)  & 0x3F;
+        dest_reg = (op >> 3) & 1;
+        src_reg  = (op & 1) ? 0 : 1;
+        sprintf(dsp->disasm_str_instr, "extractu #$%02x,$%02x,%s,%s",
+                width, offset,
+                src_reg ? "b" : "a",
+                dest_reg ? "b" : "a");
+    } else {
+        dsp->disasm_cur_inst_len++;
+        sprintf(dsp->disasm_str_instr, "extractu #$%02x,$%02x,%s,%s",
+                width, offset,
+                src_reg ? "b" : "a",
+                dest_reg ? "b" : "a");
+    }
+}
+
 static void dis_div(dsp_core_t* dsp)
 {
     uint32_t srcreg=DSP_REG_NULL, destreg;

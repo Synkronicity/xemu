@@ -193,6 +193,10 @@ int main(int argc, char *argv[])
     for (uint32_t p = 0x000180; p <= 0x000190; p++) {
         printf("    P:0x%06X = 0x%06X\n", p, dsp56k_read_memory(&core, DSP_SPACE_P, p));
     }
+    printf("[*] AC-3 Kernel Exponent Extraction Peek (PC 0x000510 - 0x000525):\n");
+    for (uint32_t p = 0x000510; p <= 0x000525; p++) {
+        printf("    P:0x%06X = 0x%06X\n", p, dsp56k_read_memory(&core, DSP_SPACE_P, p));
+    }
 
     /* Phase 56: Activate Front Stereo Audio Stream in Host Mailbox */
     printf("[*] Activating Front Stereo Stream in Host Mailbox (X:0x0BC1 = 0x000300)...\n");
