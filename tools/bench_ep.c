@@ -12,38 +12,38 @@
 
 static uint32_t dma_control_reg = 0;
 static int dma_transfer_countdown = -1;
+static uint32_t hi08_c5_reg = 0;
 
 static uint32_t bench_read_peripheral(dsp_core_t *core, uint32_t address)
 {
     printf("[PERIPH READ ] Address: 0x%06X (PC: 0x%06X)\n", address, core->pc);
 
-    /* HI08 Host Status Register (0xFFFFC5): Handshake bit 1 */
+    /* HI08 Host Status Register (0xFFFFC5):
+     * Return the active backing state written by the DSP, but ensure Bit 1
+     * (Host Acknowledge) is set after the initial bootstrap poll count.
+     */
     if (address == 0xFFFFC5) {
         static int c5_poll_count = 0;
         c5_poll_count++;
         if (c5_poll_count > 8) {
-            return 0x000002;
+            return hi08_c5_reg | 0x000002;
         }
-        return 0x000000;
+        return hi08_c5_reg;
     }
 
-    /* DMA Status / Control Register (0xFFFFD6):
-     * Default: Bit 4 is 0 (Idle, satisfying jset #4 at P:0x02D0).
-     * After write trigger (Bit 0 set): countdown elapses, then Bit 4 returns 1
-     * (Satisfying jclr #4 at P:0x02D7), then resets back to 0.
-     */
+    /* DMA Status / Control Register (0xFFFFD6) */
     if (address == 0xFFFFD6) {
         if (dma_transfer_countdown > 0) {
             dma_transfer_countdown--;
             return dma_control_reg & ~0x000010;
         } else if (dma_transfer_countdown == 0) {
-            dma_transfer_countdown = -1; /* Auto-clear after reporting completion */
-            return dma_control_reg | 0x000010; /* Bit 4 set: Done */
+            dma_transfer_countdown = -1;
+            return dma_control_reg | 0x000010;
         }
-        return dma_control_reg & ~0x000010; /* Idle: Bit 4 clear */
+        return dma_control_reg & ~0x000010;
     }
 
-    /* ESSI0 Status Register (0xFFFFB3): Return Transmitter Empty / Ready (Bit 2 & 3 set) */
+    /* ESSI0 Status Register (0xFFFFB3): Return Transmitter Empty / Ready */
     if (address == 0xFFFFB3) {
         return 0x00000C;
     }
@@ -56,10 +56,13 @@ static void bench_write_peripheral(dsp_core_t *core, uint32_t address, uint32_t 
     printf("[PERIPH WRITE] Address: 0x%06X -> Value: 0x%06X (PC: 0x%06X, Cycle: %u)\n",
            address, value & 0xFFFFFF, core->pc, core->cycle_count);
 
+    if (address == 0xFFFFC5) {
+        hi08_c5_reg = value & 0xFFFFFF;
+    }
+
     if (address == 0xFFFFD6) {
         dma_control_reg = value & 0xFFFFFF;
         if (value & 0x01) {
-            /* Transfer triggered: arm completion in 2 poll cycles */
             dma_transfer_countdown = 2;
         }
     }
