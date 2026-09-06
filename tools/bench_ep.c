@@ -211,12 +211,12 @@ int main(int argc, char *argv[])
     }
 
     /* Replace indefinite execution loop with frame-monitored runner */
-    printf("[*] Beginning Audio Kernel Execution (Target: %d Frames)...\n", TARGET_FRAMES);
+    printf("[*] Beginning Audio Kernel Execution (Target: %d Active Frames)...\n", TARGET_FRAMES);
 
     uint32_t last_frame_count = 0;
     uint32_t total_instructions = 0;
 
-    while (total_instructions < 100000) {
+    while (total_instructions < 1000000) {
         dsp56k_execute_instruction(&core);
         core.cycle_count += core.instr_cycle;
         core.instr_cycle = 0;
@@ -226,8 +226,8 @@ int main(int argc, char *argv[])
         uint32_t current_frame = dsp56k_read_memory(&core, DSP_SPACE_P, 0x0007);
         if (current_frame != last_frame_count) {
             uint32_t ping_pong = dsp56k_read_memory(&core, DSP_SPACE_P, 0x0116);
-            printf("\n>>> [AUDIO FRAME %u COMPLETED] Cycle: %" PRIu64 " | Buffer State P:$0116: 0x%06X | DMA Addr: 0x%06X <<<\n\n",
-                   current_frame, (uint64_t)core.cycle_count, ping_pong, dma_control_reg);
+            printf("\n>>> [AUDIO FRAME %u COMPLETED] Instructions: %u | Cycle: %" PRIu64 " | Buffer P:$0116: 0x%06X | DMA Addr: 0x%06X <<<\n",
+                   current_frame, total_instructions, (uint64_t)core.cycle_count, ping_pong, dma_control_reg);
             last_frame_count = current_frame;
 
             if (current_frame >= TARGET_FRAMES) {
@@ -237,24 +237,24 @@ int main(int argc, char *argv[])
         }
     }
 
-    /* Forensic Memory Inspection: Audio Descriptors & Host Mailbox */
-    printf("\n[*] =================== FORENSIC MEMORY MAP ===================\n");
+    /* Forensic Memory Inspection: Processed PCM Mixbuffer & AC-3 State */
+    printf("\n[*] =================== POST-TRANSFORM MEMORY MAP ===================\n");
 
-    printf("\n--- DMA Audio Descriptor Block (P:0x01A0 - P:0x01AF) ---\n");
-    for (uint32_t p = 0x01A0; p <= 0x01AF; p++) {
-        printf("    P:0x%06X = 0x%06X\n", p, dsp56k_read_memory(&core, DSP_SPACE_P, p));
-    }
-
-    printf("\n--- Host Stream Control Mailbox (X:0x0BC0 - X:0x0BCF) ---\n");
-    for (uint32_t x = 0x0BC0; x <= 0x0BCF; x++) {
-        printf("    X:0x%06X = 0x%06X\n", x, dsp56k_read_memory(&core, DSP_SPACE_X, x));
-    }
-
-    printf("\n--- Active DMA Mixbuffer Aperture (X:0x0029A0 - X:0x0029AF) ---\n");
-    for (uint32_t a = 0x0029A0; a <= 0x0029AF; a++) {
+    printf("\n--- Transformed Synthetic PCM Mixbuffer (X:0x0029A2 - X:0x0029C2) ---\n");
+    for (uint32_t a = 0x0029A2; a <= 0x0029C2; a++) {
         printf("    X:0x%06X = 0x%06X\n", a, dsp56k_read_memory(&core, DSP_SPACE_X, a));
     }
-    printf("[*] ==========================================================\n\n");
+
+    printf("\n--- AC-3 Filterbank / Work Registers (X:0x0600 - X:0x063F) ---\n");
+    for (uint32_t x = 0x0600; x <= 0x063F; x += 4) {
+        printf("    X:0x%06X: 0x%06X 0x%06X 0x%06X 0x%06X\n",
+               x,
+               dsp56k_read_memory(&core, DSP_SPACE_X, x),
+               dsp56k_read_memory(&core, DSP_SPACE_X, x + 1),
+               dsp56k_read_memory(&core, DSP_SPACE_X, x + 2),
+               dsp56k_read_memory(&core, DSP_SPACE_X, x + 3));
+    }
+    printf("[*] ==================================================================\n\n");
 
     printf("====================================================\n");
     printf("  Execution Summary                                 \n");
