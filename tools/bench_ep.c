@@ -11,6 +11,7 @@
 #define MAX_CYCLES      50000
 
 static uint32_t dma_control_reg = 0;
+static int dma_transfer_countdown = -1;
 
 static uint32_t bench_read_peripheral(dsp_core_t *core, uint32_t address)
 {
@@ -21,18 +22,25 @@ static uint32_t bench_read_peripheral(dsp_core_t *core, uint32_t address)
         static int c5_poll_count = 0;
         c5_poll_count++;
         if (c5_poll_count > 8) {
-            printf("[HOST MOCK] Acknowledging DSP Handshake on 0xFFFFC5 (Bit 1 set) at poll #%d\n", c5_poll_count);
             return 0x000002;
         }
         return 0x000000;
     }
 
     /* DMA Status / Control Register (0xFFFFD6):
-     * When polled after a trigger, assert Bit 4 (0x10) to indicate DMA transfer completed.
+     * Default: Bit 4 is 0 (Idle, satisfying jset #4 at P:0x02D0).
+     * After write trigger (Bit 0 set): countdown elapses, then Bit 4 returns 1
+     * (Satisfying jclr #4 at P:0x02D7), then resets back to 0.
      */
     if (address == 0xFFFFD6) {
-        /* Return Transfer Complete (Bit 4 set) + preserve active status */
-        return dma_control_reg | 0x000010;
+        if (dma_transfer_countdown > 0) {
+            dma_transfer_countdown--;
+            return dma_control_reg & ~0x000010;
+        } else if (dma_transfer_countdown == 0) {
+            dma_transfer_countdown = -1; /* Auto-clear after reporting completion */
+            return dma_control_reg | 0x000010; /* Bit 4 set: Done */
+        }
+        return dma_control_reg & ~0x000010; /* Idle: Bit 4 clear */
     }
 
     /* ESSI0 Status Register (0xFFFFB3): Return Transmitter Empty / Ready (Bit 2 & 3 set) */
@@ -50,6 +58,10 @@ static void bench_write_peripheral(dsp_core_t *core, uint32_t address, uint32_t 
 
     if (address == 0xFFFFD6) {
         dma_control_reg = value & 0xFFFFFF;
+        if (value & 0x01) {
+            /* Transfer triggered: arm completion in 2 poll cycles */
+            dma_transfer_countdown = 2;
+        }
     }
 }
 
