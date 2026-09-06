@@ -19,7 +19,6 @@
 
 #include "apu_int.h"
 
-static SDL_AudioStream *surround_stream = NULL;
 float ext_surround_buf[6][256];
 int ext_surround_idx = 0;
 
@@ -28,7 +27,7 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
     SDL_AudioSpec spec = {
         .freq = 48000,
         .format = SDL_AUDIO_S16LE,
-        .channels = 2,
+        .channels = 6, /* Changed from 2 to support discrete 5.1 LPCM natively */
     };
 
     d->monitor.stream = NULL;
@@ -56,31 +55,16 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
                           SDL_AUDIO_BYTESIZE(spec.format) *
                           spec.freq / dev_spec.freq;
     }
-    int frame_bytes = 256 * 6 * sizeof(int16_t);
+    int frame_bytes = 256 * spec.channels * sizeof(int16_t);
     int drain = MAX(dev_drain_bytes, frame_bytes);
     d->monitor.queued_bytes_low = drain;
     d->monitor.queued_bytes_high = 3 * drain;
 
     SDL_ResumeAudioDevice(dev);
-
-    SDL_AudioSpec surr_spec = {
-        .freq = 48000,
-        .format = SDL_AUDIO_S16LE,
-        .channels = 6,
-    };
-    surround_stream = SDL_OpenAudioDeviceStream(
-        SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &surr_spec, NULL, NULL);
-    if (surround_stream) {
-        SDL_ResumeAudioDevice(SDL_GetAudioStreamDevice(surround_stream));
-    }
 }
 
 void mcpx_apu_monitor_finalize(MCPXAPUState *d)
 {
-    if (surround_stream) {
-        SDL_DestroyAudioStream(surround_stream);
-        surround_stream = NULL;
-    }
     if (d->monitor.stream) {
         SDL_DestroyAudioStream(d->monitor.stream);
     }
@@ -92,45 +76,40 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
         return;
     }
 
-    if (d->is_5_1_active && surround_stream) {
+    if (d->monitor.stream) {
         int16_t interleaved[6 * 256];
-        for (int i = 0; i < 256; i++) {
-            float fl  = ext_surround_buf[0][i];
-            float fr  = ext_surround_buf[1][i];
-            float fc  = ext_surround_buf[2][i];
-            float lfe = ext_surround_buf[3][i];
-            float rl  = ext_surround_buf[4][i];
-            float rr  = ext_surround_buf[5][i];
+        if (d->is_5_1_active) {
+            for (int i = 0; i < 256; i++) {
+                float fl  = ext_surround_buf[0][i];
+                float fr  = ext_surround_buf[1][i];
+                float fc  = ext_surround_buf[2][i];
+                float lfe = ext_surround_buf[3][i];
+                float rl  = ext_surround_buf[4][i];
+                float rr  = ext_surround_buf[5][i];
 
-            interleaved[i * 6 + 0] = (int16_t)MAX(-32768.0f, MIN(32767.0f, fl * 32767.0f));
-            interleaved[i * 6 + 1] = (int16_t)MAX(-32768.0f, MIN(32767.0f, fr * 32767.0f));
-            interleaved[i * 6 + 2] = (int16_t)MAX(-32768.0f, MIN(32767.0f, fc * 32767.0f));
-            interleaved[i * 6 + 3] = (int16_t)MAX(-32768.0f, MIN(32767.0f, lfe * 32767.0f));
-            interleaved[i * 6 + 4] = (int16_t)MAX(-32768.0f, MIN(32767.0f, rl * 32767.0f));
-            interleaved[i * 6 + 5] = (int16_t)MAX(-32768.0f, MIN(32767.0f, rr * 32767.0f));
+                interleaved[i * 6 + 0] = (int16_t)MAX(-32768.0f, MIN(32767.0f, fl * 32767.0f));
+                interleaved[i * 6 + 1] = (int16_t)MAX(-32768.0f, MIN(32767.0f, fr * 32767.0f));
+                interleaved[i * 6 + 2] = (int16_t)MAX(-32768.0f, MIN(32767.0f, fc * 32767.0f));
+                interleaved[i * 6 + 3] = (int16_t)MAX(-32768.0f, MIN(32767.0f, lfe * 32767.0f));
+                interleaved[i * 6 + 4] = (int16_t)MAX(-32768.0f, MIN(32767.0f, rl * 32767.0f));
+                interleaved[i * 6 + 5] = (int16_t)MAX(-32768.0f, MIN(32767.0f, rr * 32767.0f));
+            }
+            ext_surround_idx = 0;
+        } else {
+            /* Stereo fallback: map L/R to front channels and silence center/sub/surrounds */
+            for (int i = 0; i < 256; i++) {
+                interleaved[i * 6 + 0] = d->monitor.frame_buf[i][0];
+                interleaved[i * 6 + 1] = d->monitor.frame_buf[i][1];
+                interleaved[i * 6 + 2] = 0;
+                interleaved[i * 6 + 3] = 0;
+                interleaved[i * 6 + 4] = 0;
+                interleaved[i * 6 + 5] = 0;
+            }
         }
 
         float vu = pow(fmax(0.0, fmin(g_config.audio.volume_limit, 1.0)), M_E);
-        SDL_SetAudioStreamGain(surround_stream, vu);
-        SDL_PutAudioStreamData(surround_stream, interleaved, sizeof(interleaved));
-        ext_surround_idx = 0;
-
-        /* Mute the primary throttle stream */
-        if (d->monitor.stream) {
-            SDL_SetAudioStreamGain(d->monitor.stream, 0.0f);
-            SDL_PutAudioStreamData(d->monitor.stream, d->monitor.frame_buf,
-                                   sizeof(d->monitor.frame_buf));
-        }
-    } else {
-        if (surround_stream) {
-            SDL_SetAudioStreamGain(surround_stream, 0.0f);
-        }
-        if (d->monitor.stream) {
-            float vu = pow(fmax(0.0, fmin(g_config.audio.volume_limit, 1.0)), M_E);
-            SDL_SetAudioStreamGain(d->monitor.stream, vu);
-            SDL_PutAudioStreamData(d->monitor.stream, d->monitor.frame_buf,
-                                   sizeof(d->monitor.frame_buf));
-        }
+        SDL_SetAudioStreamGain(d->monitor.stream, vu);
+        SDL_PutAudioStreamData(d->monitor.stream, interleaved, sizeof(interleaved));
     }
 
     memset(d->monitor.frame_buf, 0, sizeof(d->monitor.frame_buf));
