@@ -202,6 +202,8 @@ int main(int argc, char *argv[])
 
     while (total_instructions < 100000) {
         dsp56k_execute_instruction(&core);
+        core.cycle_count += core.instr_cycle;
+        core.instr_cycle = 0;
         total_instructions++;
 
         /* Monitor Master Audio Frame Counter at P:$0007 */
@@ -218,6 +220,25 @@ int main(int argc, char *argv[])
             }
         }
     }
+
+    /* Forensic Memory Inspection: Audio Descriptors & Host Mailbox */
+    printf("\n[*] =================== FORENSIC MEMORY MAP ===================\n");
+
+    printf("\n--- DMA Audio Descriptor Block (P:0x01A0 - P:0x01AF) ---\n");
+    for (uint32_t p = 0x01A0; p <= 0x01AF; p++) {
+        printf("    P:0x%06X = 0x%06X\n", p, dsp56k_read_memory(&core, DSP_SPACE_P, p));
+    }
+
+    printf("\n--- Host Stream Control Mailbox (X:0x0BC0 - X:0x0BCF) ---\n");
+    for (uint32_t x = 0x0BC0; x <= 0x0BCF; x++) {
+        printf("    X:0x%06X = 0x%06X\n", x, dsp56k_read_memory(&core, DSP_SPACE_X, x));
+    }
+
+    printf("\n--- Active DMA Mixbuffer Aperture (X:0x0029A0 - X:0x0029AF) ---\n");
+    for (uint32_t a = 0x0029A0; a <= 0x0029AF; a++) {
+        printf("    X:0x%06X = 0x%06X\n", a, dsp56k_read_memory(&core, DSP_SPACE_X, a));
+    }
+    printf("[*] ==========================================================\n\n");
 
     printf("====================================================\n");
     printf("  Execution Summary                                 \n");
