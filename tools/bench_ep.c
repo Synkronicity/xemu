@@ -66,12 +66,101 @@ static void bench_write_peripheral(dsp_core_t *core, uint32_t address, uint32_t 
             dma_transfer_countdown = 2;
             printf("[DMA TRIGGER] Src: 0x%06X -> Dst: 0x%06X | Ctrl: 0x%06X (PC: 0x%06X, Cycle: %" PRIu64 ")\n",
                    dma_src_addr, dma_dst_addr, dma_control_reg, core->pc, (uint64_t)core->cycle_count);
+
+            /* Active DMA Copy: Transfer 64 words from Src to Dst if within X-RAM bounds */
+            if (dma_src_addr < DSP_XRAM_SIZE && dma_dst_addr < DSP_XRAM_SIZE) {
+                for (uint32_t i = 0; i < 64; i++) {
+                    if ((dma_src_addr + i < DSP_XRAM_SIZE) && (dma_dst_addr + i < DSP_XRAM_SIZE)) {
+                        uint32_t val = dsp56k_read_memory(core, DSP_SPACE_X, dma_src_addr + i);
+                        dsp56k_write_memory(core, DSP_SPACE_X, dma_dst_addr + i, val);
+                    }
+                }
+            }
         }
     }
 
     if (address == 0xFFFFC5) {
         hi08_c5_reg = value & 0xFFFFFF;
     }
+}
+
+static FILE *wav_file = NULL;
+static uint32_t total_pcm_bytes = 0;
+
+static void wav_init(const char *filename)
+{
+    wav_file = fopen(filename, "wb");
+    if (!wav_file) {
+        fprintf(stderr, "[!] Failed to open %s for WAV export.\n", filename);
+        return;
+    }
+
+    /* Write 44-byte placeholder header (patched at close) */
+    uint8_t header[44] = {0};
+    fwrite(header, 1, 44, wav_file);
+    total_pcm_bytes = 0;
+}
+
+static void wav_write_frame_51(dsp_core_t *core)
+{
+    if (!wav_file) return;
+
+    /* Extract 32 samples per channel across all 6 discrete buffers */
+    for (uint32_t i = 0; i < 32; i++) {
+        uint32_t ch[6];
+        ch[0] = dsp56k_read_memory(core, DSP_SPACE_X, 0x000000 + i); /* FL  */
+        ch[1] = dsp56k_read_memory(core, DSP_SPACE_X, 0x000100 + i); /* FR  */
+        ch[2] = dsp56k_read_memory(core, DSP_SPACE_X, 0x000200 + i); /* C   */
+        ch[3] = dsp56k_read_memory(core, DSP_SPACE_X, 0x000300 + i); /* LFE */
+        ch[4] = dsp56k_read_memory(core, DSP_SPACE_X, 0x000400 + i); /* SL  */
+        ch[5] = dsp56k_read_memory(core, DSP_SPACE_X, 0x000500 + i); /* SR  */
+
+        /* Interleave as 24-bit Little-Endian (3 bytes per sample) */
+        for (int c = 0; c < 6; c++) {
+            uint8_t b0 = ch[c] & 0xFF;
+            uint8_t b1 = (ch[c] >> 8) & 0xFF;
+            uint8_t b2 = (ch[c] >> 16) & 0xFF;
+            fputc(b0, wav_file);
+            fputc(b1, wav_file);
+            fputc(b2, wav_file);
+            total_pcm_bytes += 3;
+        }
+    }
+}
+
+static void wav_close(void)
+{
+    if (!wav_file) return;
+
+    /* Patch valid 44-byte RIFF/WAVE header */
+    fseek(wav_file, 0, SEEK_SET);
+
+    uint32_t riff_size = 36 + total_pcm_bytes;
+    uint32_t sample_rate = 48000;
+    uint16_t num_channels = 6;
+    uint16_t bits_per_sample = 24;
+    uint32_t byte_rate = sample_rate * num_channels * (bits_per_sample / 8);
+    uint16_t block_align = num_channels * (bits_per_sample / 8);
+
+    uint8_t hdr[44] = {
+        'R', 'I', 'F', 'F',
+        riff_size & 0xFF, (riff_size >> 8) & 0xFF, (riff_size >> 16) & 0xFF, (riff_size >> 24) & 0xFF,
+        'W', 'A', 'V', 'E',
+        'f', 'm', 't', ' ',
+        16, 0, 0, 0,             /* Subchunk1Size (16 for PCM) */
+        1, 0,                    /* AudioFormat (1 = PCM) */
+        num_channels & 0xFF, (num_channels >> 8) & 0xFF,
+        sample_rate & 0xFF, (sample_rate >> 8) & 0xFF, (sample_rate >> 16) & 0xFF, (sample_rate >> 24) & 0xFF,
+        byte_rate & 0xFF, (byte_rate >> 8) & 0xFF, (byte_rate >> 16) & 0xFF, (byte_rate >> 24) & 0xFF,
+        block_align & 0xFF, (block_align >> 8) & 0xFF,
+        bits_per_sample & 0xFF, (bits_per_sample >> 8) & 0xFF,
+        'd', 'a', 't', 'a',
+        total_pcm_bytes & 0xFF, (total_pcm_bytes >> 8) & 0xFF, (total_pcm_bytes >> 16) & 0xFF, (total_pcm_bytes >> 24) & 0xFF
+    };
+
+    fwrite(hdr, 1, 44, wav_file);
+    fclose(wav_file);
+    printf("[+] 5.1 LPCM WAV Export Complete: tools/ep_output_5_1.wav (%u bytes written)\n", total_pcm_bytes);
 }
 
 int main(int argc, char *argv[])
@@ -225,6 +314,9 @@ int main(int argc, char *argv[])
         dsp56k_write_memory(&core, DSP_SPACE_X, 0x002BA2 + (i * 2) + 1, 0x660000 | (i << 8));
     }
 
+    /* Initialize 5.1 LPCM WAV Exporter */
+    wav_init("tools/ep_output_5_1.wav");
+
     /* Replace indefinite execution loop with frame-monitored runner */
     printf("[*] Beginning Audio Kernel Execution (Target: %d Active Frames)...\n", TARGET_FRAMES);
 
@@ -245,12 +337,18 @@ int main(int argc, char *argv[])
                    current_frame, total_instructions, (uint64_t)core.cycle_count, ping_pong, dma_control_reg);
             last_frame_count = current_frame;
 
+            /* Capture 5.1 multichannel audio frame */
+            wav_write_frame_51(&core);
+
             if (current_frame >= TARGET_FRAMES) {
                 printf("[+] Target frame count (%u) reached cleanly. Halting execution.\n", TARGET_FRAMES);
                 break;
             }
         }
     }
+
+    /* Finalize WAV file header */
+    wav_close();
 
     printf("\n[*] =================== POST-TRANSFORM 5.1 MEMORY MAP ===================\n");
 
@@ -280,6 +378,17 @@ int main(int argc, char *argv[])
                dsp56k_read_memory(&core, DSP_SPACE_X, x + 1),
                dsp56k_read_memory(&core, DSP_SPACE_X, x + 2),
                dsp56k_read_memory(&core, DSP_SPACE_X, x + 3));
+    }
+
+    printf("\n--- Internal Discrete Channel Buffers (First 8 Samples) ---\n");
+    const char *chan_names[6] = { "FL ", "FR ", "C  ", "LFE", "SL ", "SR " };
+    for (int c = 0; c < 6; c++) {
+        uint32_t base = c * 0x0100;
+        printf("    [%s @ 0x%06X]:", chan_names[c], base);
+        for (uint32_t i = 0; i < 8; i++) {
+            printf(" 0x%06X", dsp56k_read_memory(&core, DSP_SPACE_X, base + i));
+        }
+        printf("\n");
     }
     printf("[*] =====================================================================\n\n");
 
