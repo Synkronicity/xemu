@@ -63,7 +63,9 @@ static void dsp_c_reset(DSPState *dsp)
 
 static void dsp_c_step(DSPState *dsp)
 {
-    dsp56k_execute_instruction(c_core(dsp));
+    dsp_core_t *core = c_core(dsp);
+    dsp56k_execute_instruction(core);
+    core->cycle_count += core->instr_cycle;
 }
 
 static void dsp_c_run(DSPState *dsp, int cycles)
@@ -90,13 +92,15 @@ static void dsp_c_bootstrap(DSPState *dsp)
 {
     dsp_core_t *core = c_core(dsp);
 
-    // scratch memory is dma'd in to pram by the bootrom
-    dsp->dma.scratch_rw(dsp->dma.rw_opaque, (uint8_t *)core->pram, 0, 0x800 * 4,
-                        false);
-    for (int i = 0; i < 0x800; i++) {
-        if (core->pram[i] & 0xff000000) {
-            DPRINTF("Bootstrap %04x: %08x\n", i, core->pram[i]);
-            core->pram[i] &= 0x00ffffff;
+    if (dsp->is_gp) {
+        // scratch memory is dma'd in to pram by the bootrom
+        dsp->dma.scratch_rw(dsp->dma.rw_opaque, (uint8_t *)core->pram, 0, 0x800 * 4,
+                            false);
+        for (int i = 0; i < 0x800; i++) {
+            if (core->pram[i] & 0xff000000) {
+                DPRINTF("Bootstrap %04x: %08x\n", i, core->pram[i]);
+                core->pram[i] &= 0x00ffffff;
+            }
         }
     }
     memset(core->pram_opcache, 0, sizeof(core->pram_opcache));

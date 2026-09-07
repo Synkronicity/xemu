@@ -104,6 +104,15 @@ struct DSPState {
 
     bool is_gp;
 
+    struct {
+        uint32_t dsr0;
+        uint32_t ddr0;
+        uint32_t dcr0;
+        uint32_t c5_reg;
+        int countdown;
+        uint32_t ext_mem[16384];
+    } ep_dma;
+
     void *backend;
 };
 
@@ -121,6 +130,16 @@ void dsp_start_frame(DSPState *dsp);
 uint32_t dsp_read_memory(DSPState *dsp, char space, uint32_t addr);
 void dsp_write_memory(DSPState *dsp, char space, uint32_t address,
                       uint32_t value);
+
+static inline uint32_t dsp_read_memory_x(DSPState *dsp, uint32_t addr)
+{
+    return dsp_read_memory(dsp, 'X', addr);
+}
+
+static inline void dsp_write_memory_x(DSPState *dsp, uint32_t addr, uint32_t val)
+{
+    dsp_write_memory(dsp, 'X', addr, val);
+}
 
 /* Accessor functions for backend-independent state access */
 bool dsp_get_halt_requested(DSPState *dsp);

@@ -46,7 +46,7 @@ void mcpx_apu_update_dsp_preference(MCPXAPUState *d)
 
     if (last_known_jit_pref != (int)g_config.audio.use_dsp_jit) {
         dsp_set_engine(d->gp.dsp, g_config.audio.use_dsp_jit);
-        dsp_set_engine(d->ep.dsp, g_config.audio.use_dsp_jit);
+        dsp_set_engine(d->ep.dsp, false);
         last_known_jit_pref = g_config.audio.use_dsp_jit;
     }
 }
@@ -431,12 +431,7 @@ static void ep_write(void *opaque, hwaddr addr, uint64_t val, unsigned int size)
         } else {
             d->is_5_1_active = false;
         }
-        /* AC-3 Watchdog Stub:
-         * Intercept guest attempt to boot the hardware AC-3 Encode Processor.
-         * We do not call proc_rst_write() to bootstrap the EP DSP core,
-         * preventing unhandled DSP opcode exceptions/fatal asserts.
-         * Store the register value so guest reads reflect the state.
-         */
+        proc_rst_write(d->ep.dsp, d->ep.regs[NV_PAPU_EPRST], val);
         d->ep.regs[NV_PAPU_EPRST] = val;
         d->ep_frame_div = 0; /* FIXME: Still unsure about frame sync */
         break;
@@ -464,8 +459,7 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
         }
     }
 
-    bool ep_enabled = !d->is_5_1_active &&
-                      (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
+    bool ep_enabled = (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
                       (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPDSPRST);
 
     /* Run GP */
@@ -500,12 +494,8 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
         }
     }
 
-    /* Run EP */
+    /* Accumulate 5.1 surround mixbins for monitor output & EP DMA aperture */
     if (d->is_5_1_active) {
-        /* AC-3 Encoder Bypass for Mode A:
-         * Skip the unimplemented/unstable Encode Processor when 5.1 surround
-         * is active, leaving monitor.c to scrape the 5.1 discrete mixbins from GP.
-         */
         for (int ch = 0; ch < 6; ch++) {
             for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
                 if (ext_surround_idx + i < 256) {
@@ -516,18 +506,33 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
         if (ext_surround_idx + NUM_SAMPLES_PER_FRAME <= 256) {
             ext_surround_idx += NUM_SAMPLES_PER_FRAME;
         }
-        return;
+
+        /* Feed active multichannel PCM samples to EP external memory aperture (0x4000) */
+        int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
+        for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+            /* Pair 0 (FL / FR): offset 0x0000 */
+            d->ep.dsp->ep_dma.ext_mem[0x0000 + ((off + i) * 2)]     = float_to_24b(mixbins[0][i]);
+            d->ep.dsp->ep_dma.ext_mem[0x0000 + ((off + i) * 2) + 1] = float_to_24b(mixbins[1][i]);
+            /* Pair 1 (FC / LFE): offset 0x0100 */
+            d->ep.dsp->ep_dma.ext_mem[0x0100 + ((off + i) * 2)]     = float_to_24b(mixbins[2][i]);
+            d->ep.dsp->ep_dma.ext_mem[0x0100 + ((off + i) * 2) + 1] = float_to_24b(mixbins[3][i]);
+            /* Pair 2 (RL / RR): offset 0x0200 */
+            d->ep.dsp->ep_dma.ext_mem[0x0200 + ((off + i) * 2)]     = float_to_24b(mixbins[4][i]);
+            d->ep.dsp->ep_dma.ext_mem[0x0200 + ((off + i) * 2) + 1] = float_to_24b(mixbins[5][i]);
+        }
     }
 
-    if ((d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
-        (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPDSPRST)) {
+    /* Run EP */
+    if (ep_enabled) {
         if (d->ep_frame_div % 8 == 0) {
             dsp_start_frame(d->ep.dsp);
             dsp_set_halt_requested(d->ep.dsp, false);
             dsp_set_cycle_count(d->ep.dsp, 0);
+            int ep_loops = 0;
             do {
-                dsp_run(d->ep.dsp, 1000);
-            } while (!dsp_get_halt_requested(d->ep.dsp) && d->ep.realtime);
+                dsp_step(d->ep.dsp);
+                ep_loops++;
+            } while (!dsp_get_halt_requested(d->ep.dsp) && ep_loops < 50000);
             g_dbg.ep.cycles = dsp_get_cycle_count(d->ep.dsp);
         }
     }

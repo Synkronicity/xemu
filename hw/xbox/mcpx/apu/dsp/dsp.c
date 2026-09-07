@@ -41,30 +41,90 @@ static int g_gp_frame_count = 0;
  * Shared peripheral I/O helpers, used by both backends via callbacks.
  */
 
+static uint32_t dsp_dma_read_word(DSPState *dsp, uint32_t addr)
+{
+    if (addr >= 0x004000 && (addr - 0x004000) < 16384) {
+        return dsp->ep_dma.ext_mem[addr - 0x004000];
+    }
+    if (addr < DSP_XRAM_SIZE) {
+        return dsp_read_memory_x(dsp, addr);
+    }
+    return 0;
+}
+
+static void dsp_dma_write_word(DSPState *dsp, uint32_t addr, uint32_t val)
+{
+    if (addr >= 0x004000 && (addr - 0x004000) < 16384) {
+        dsp->ep_dma.ext_mem[addr - 0x004000] = val;
+        return;
+    }
+    if (addr < DSP_XRAM_SIZE) {
+        dsp_write_memory_x(dsp, addr, val);
+    }
+}
+
+static void ep_dma_transfer(DSPState *dsp)
+{
+    for (uint32_t i = 0; i < 64; i++) {
+        uint32_t val = dsp_dma_read_word(dsp, dsp->ep_dma.dsr0 + i);
+        dsp_dma_write_word(dsp, dsp->ep_dma.ddr0 + i, val);
+    }
+}
+
 uint32_t read_peripheral(DSPState *dsp, uint32_t address)
 {
     uint32_t v = 0xababa;
     switch (address) {
     case 0xFFFFB3:
-        v = 0; // core->num_inst; // ??
+        if (!dsp->is_gp) {
+            v = 0x00000C;
+        } else {
+            v = 0; // core->num_inst; // ??
+        }
         break;
     case 0xFFFFC5:
-        v = dsp->interrupts;
-        if (dsp->dma.eol) {
-            v |= INTERRUPT_DMA_EOL;
+        if (!dsp->is_gp) {
+            v = dsp->ep_dma.c5_reg | 0x000002;
+        } else {
+            v = dsp->interrupts;
+            if (dsp->dma.eol) {
+                v |= INTERRUPT_DMA_EOL;
+            }
         }
         break;
     case 0xFFFFD4:
-        v = dsp_dma_read(&dsp->dma, DMA_NEXT_BLOCK);
+        if (!dsp->is_gp) {
+            v = dsp->ep_dma.dsr0;
+        } else {
+            v = dsp_dma_read(&dsp->dma, DMA_NEXT_BLOCK);
+        }
         break;
     case 0xFFFFD5:
-        v = dsp_dma_read(&dsp->dma, DMA_START_BLOCK);
+        if (!dsp->is_gp) {
+            v = dsp->ep_dma.ddr0;
+        } else {
+            v = dsp_dma_read(&dsp->dma, DMA_START_BLOCK);
+        }
         break;
     case 0xFFFFD6:
-        v = dsp_dma_read(&dsp->dma, DMA_CONTROL);
+        if (!dsp->is_gp) {
+            if (dsp->ep_dma.countdown > 0) {
+                dsp->ep_dma.countdown--;
+            }
+            v = (dsp->ep_dma.dcr0 & ~0x000010) | ((dsp->ep_dma.countdown == 0) ? 0x10 : 0x00);
+            if (dsp->ep_dma.countdown == 0) {
+                dsp->ep_dma.countdown = -1;
+            }
+        } else {
+            v = dsp_dma_read(&dsp->dma, DMA_CONTROL);
+        }
         break;
     case 0xFFFFD7:
-        v = dsp_dma_read(&dsp->dma, DMA_CONFIGURATION);
+        if (!dsp->is_gp) {
+            v = 0;
+        } else {
+            v = dsp_dma_read(&dsp->dma, DMA_CONFIGURATION);
+        }
         break;
     }
 
@@ -81,22 +141,44 @@ void write_peripheral(DSPState *dsp, uint32_t address, uint32_t value)
         }
         break;
     case 0xFFFFC5:
-        dsp->interrupts &= ~value;
-        if (value & INTERRUPT_DMA_EOL) {
-            dsp->dma.eol = false;
+        if (!dsp->is_gp) {
+            dsp->ep_dma.c5_reg = value & 0xFFFFFF;
+        } else {
+            dsp->interrupts &= ~value;
+            if (value & INTERRUPT_DMA_EOL) {
+                dsp->dma.eol = false;
+            }
         }
         break;
     case 0xFFFFD4:
-        dsp_dma_write(&dsp->dma, DMA_NEXT_BLOCK, value);
+        if (!dsp->is_gp) {
+            dsp->ep_dma.dsr0 = value & 0xFFFFFF;
+        } else {
+            dsp_dma_write(&dsp->dma, DMA_NEXT_BLOCK, value);
+        }
         break;
     case 0xFFFFD5:
-        dsp_dma_write(&dsp->dma, DMA_START_BLOCK, value);
+        if (!dsp->is_gp) {
+            dsp->ep_dma.ddr0 = value & 0xFFFFFF;
+        } else {
+            dsp_dma_write(&dsp->dma, DMA_START_BLOCK, value);
+        }
         break;
     case 0xFFFFD6:
-        dsp_dma_write(&dsp->dma, DMA_CONTROL, value);
+        if (!dsp->is_gp) {
+            dsp->ep_dma.dcr0 = value & 0xFFFFFF;
+            if (value & 0x01) {
+                ep_dma_transfer(dsp);
+                dsp->ep_dma.countdown = 2;
+            }
+        } else {
+            dsp_dma_write(&dsp->dma, DMA_CONTROL, value);
+        }
         break;
     case 0xFFFFD7:
-        dsp_dma_write(&dsp->dma, DMA_CONFIGURATION, value);
+        if (dsp->is_gp) {
+            dsp_dma_write(&dsp->dma, DMA_CONFIGURATION, value);
+        }
         break;
     }
 
@@ -119,7 +201,7 @@ DSPState *dsp_init(void *rw_opaque, dsp_scratch_rw_func scratch_rw,
     dsp->dma.scratch_rw = scratch_rw;
     dsp->dma.fifo_rw = fifo_rw;
 
-    if (g_config.audio.use_dsp_jit) {
+    if (is_gp && g_config.audio.use_dsp_jit) {
         dsp_jit_init(dsp);
     } else {
         dsp_c_init(dsp);
@@ -138,6 +220,7 @@ void dsp_destroy(DSPState *dsp)
 
 void dsp_reset(DSPState *dsp)
 {
+    dsp->ep_dma.countdown = -1;
     dsp->ops->reset(dsp);
 }
 
@@ -212,6 +295,9 @@ void dsp_sync_from_vm(DSPState *dsp)
 
 void dsp_set_engine(DSPState *dsp, bool use_jit)
 {
+    if (!dsp->is_gp) {
+        use_jit = false;
+    }
     bool currently_jit = (dsp->ops == &jit_dsp_ops);
     if (use_jit == currently_jit) {
         return;

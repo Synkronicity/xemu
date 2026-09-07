@@ -87,13 +87,15 @@ static void dsp_jit_bootstrap(DSPState *dsp)
 {
     JitBackend *be = jit_be(dsp);
 
-    /* Load scratch memory into PRAM (C-side owned buffer) */
-    dsp->dma.scratch_rw(dsp->dma.rw_opaque, (uint8_t *)be->pram, 0, 0x800 * 4,
-                        false);
-    for (int i = 0; i < 0x800; i++) {
-        if (be->pram[i] & 0xff000000) {
-            DPRINTF("Bootstrap %04x: %08x\n", i, be->pram[i]);
-            be->pram[i] &= 0x00ffffff;
+    if (dsp->is_gp) {
+        /* Load scratch memory into PRAM (C-side owned buffer) */
+        dsp->dma.scratch_rw(dsp->dma.rw_opaque, (uint8_t *)be->pram, 0, 0x800 * 4,
+                            false);
+        for (int i = 0; i < 0x800; i++) {
+            if (be->pram[i] & 0xff000000) {
+                DPRINTF("Bootstrap %04x: %08x\n", i, be->pram[i]);
+                be->pram[i] &= 0x00ffffff;
+            }
         }
     }
     dsp56300_invalidate_cache(be->jit);
