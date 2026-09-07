@@ -895,35 +895,20 @@ static void dsp_postexecute_interrupts(dsp_core_t* dsp)
  *  Read/Write memory functions
  **********************************/
 
-static uint32_t read_memory_p(dsp_core_t* dsp, uint32_t address)
+static uint32_t read_memory_p(dsp_core_t *core, uint32_t address)
 {
-    assert((address & 0xFF000000) == 0);
-
-    /* Internal On-Chip Program RAM (0x000000 - 0x001FFF) */
-    if (address < DSP_PRAM_SIZE) {
-        uint32_t r = ldl_le_p(&dsp->pram[address]);
-        assert((r & 0xFF000000) == 0);
-        return r;
-    }
-
-    /* On-Chip Factory Program ROM (P-ROM: 0x004000 - 0x009FFF) */
+    /* P-ROM Space (0x004000 - 0x009FFF): Decoupled bootstrap/ROM routines */
     if (address >= 0x004000 && address <= 0x009FFF) {
-        static uint32_t last_prom_logged = 0xFFFFFFFF;
-        if (address != last_prom_logged) {
-            printf("[P-ROM CALL] Routine Entry: 0x%06X (Caller PC: 0x%06X) -> Simulating RTS (0x00000C)\n",
-                   address, dsp->pc);
-            last_prom_logged = address;
-        }
-        /* Return RTS (0x00000C) */
-        return 0x00000C;
+        return 0x00000C; /* RTS */
     }
 
-    /* Out of bounds fatal fault */
-    fprintf(stderr, "\n[FATAL PRAM FAULT] Target Address: 0x%06X | DSP_PRAM_SIZE: 0x%06X (%u words) | Faulting PC: 0x%06X\n",
-            address, DSP_PRAM_SIZE, DSP_PRAM_SIZE, dsp->pc);
-    fflush(stderr);
-    assert(address < DSP_PRAM_SIZE);
-    return 0;
+    if (address >= DSP_PRAM_SIZE) {
+        fprintf(stderr, "[FATAL PRAM FAULT] Target Address: 0x%06X | DSP_PRAM_SIZE: 0x%06X (%u words) | Faulting PC: 0x%06X\n",
+                address, DSP_PRAM_SIZE, DSP_PRAM_SIZE, core->pc);
+        assert(address < DSP_PRAM_SIZE);
+    }
+
+    return core->pram[address];
 }
 
 uint32_t dsp56k_read_memory(dsp_core_t* dsp, int space, uint32_t address)
