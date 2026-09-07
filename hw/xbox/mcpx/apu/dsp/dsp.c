@@ -84,7 +84,7 @@ uint32_t read_peripheral(DSPState *dsp, uint32_t address)
         break;
     case 0xFFFFC5:
         if (!dsp->is_gp) {
-            v = dsp->ep_dma.c5_reg | 0x000002;
+            v = dsp->ep_dma.c5_reg;
         } else {
             v = dsp->interrupts;
             if (dsp->dma.eol) {
@@ -142,7 +142,12 @@ void write_peripheral(DSPState *dsp, uint32_t address, uint32_t value)
         break;
     case 0xFFFFC5:
         if (!dsp->is_gp) {
-            dsp->ep_dma.c5_reg = value & 0xFFFFFF;
+            if (value & 0x02) {
+                dsp->ep_dma.c5_reg &= ~0x02;
+            }
+            if (value & 0x80) {
+                dsp->ep_dma.c5_reg |= 0x80;
+            }
         } else {
             dsp->interrupts &= ~value;
             if (value & INTERRUPT_DMA_EOL) {
@@ -221,12 +226,18 @@ void dsp_destroy(DSPState *dsp)
 void dsp_reset(DSPState *dsp)
 {
     dsp->ep_dma.countdown = -1;
+    dsp->ep_dma.c5_reg = 0;
     dsp->ops->reset(dsp);
 }
 
 void dsp_step(DSPState *dsp)
 {
     dsp->ops->step(dsp);
+}
+
+uint32_t dsp_get_pc(DSPState *dsp)
+{
+    return dsp->ops->get_pc(dsp);
 }
 
 void dsp_run(DSPState *dsp, int cycles)
@@ -243,6 +254,8 @@ void dsp_start_frame(DSPState *dsp)
 {
     if (dsp->is_gp) {
         g_gp_frame_count++;
+    } else {
+        dsp->ep_dma.c5_reg |= 0x02;
     }
     dsp->ops->start_frame(dsp);
 }

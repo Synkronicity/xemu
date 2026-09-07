@@ -53,18 +53,5 @@ static inline float int24_to_float(int32_t value)
     return int32_to_float((uint32_t)value << 8);
 }
 
-static inline uint32_t float_to_24b(float value)
-{
-    double scaled_value = value * (8.0 * 0x100000);
-    int int24;
-    if (scaled_value >= (1.0 * 0x7fffff)) {
-        int24 = 0x7fffff;
-    } else if (scaled_value <= (-8.0 * 0x100000)) {
-        int24 = -1 - 0x7fffff;
-    } else {
-        int24 = lrint(scaled_value);
-    }
-    return int24 & 0xffffff;
-}
 
 #endif

@@ -176,6 +176,11 @@ static void dsp_c_invalidate_opcache(DSPState *dsp)
     memset(c_core(dsp)->pram_opcache, 0, sizeof(c_core(dsp)->pram_opcache));
 }
 
+static uint32_t dsp_c_get_pc(DSPState *dsp)
+{
+    return c_core(dsp)->pc;
+}
+
 /*
  * Sync: C interpreter -> DspCoreState (before VM save / debug)
  */
@@ -289,6 +294,7 @@ const DSPOps c_dsp_ops = {
     .finalize = dsp_c_finalize,
     .get_cycle_count = dsp_c_get_cycle_count,
     .get_halt_requested = dsp_c_get_halt_requested,
+    .get_pc = dsp_c_get_pc,
     .invalidate_opcache = dsp_c_invalidate_opcache,
     .read_memory = dsp_c_read_memory,
     .reset = dsp_c_reset,

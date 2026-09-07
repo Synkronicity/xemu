@@ -21,6 +21,14 @@
 
 #include "hw/xbox/mcpx/apu/apu_int.h"
 
+static inline uint32_t float_to_24b(float v)
+{
+    if (v > 1.0f) v = 1.0f;
+    if (v < -1.0f) v = -1.0f;
+    int32_t s = (int32_t)(v * 8388607.0f);
+    return (uint32_t)s & 0x00FFFFFF;
+}
+
 extern float ext_surround_buf[6][256];
 extern int ext_surround_idx;
 
@@ -510,15 +518,15 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
         /* Feed active multichannel PCM samples to EP external memory aperture (0x4000) */
         int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
         for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
-            /* Pair 0 (FL / FR): offset 0x0000 */
+            /* Pair 0 (FL / FR): offset 0x0000 (0x0000 - 0x01FF) */
             d->ep.dsp->ep_dma.ext_mem[0x0000 + ((off + i) * 2)]     = float_to_24b(mixbins[0][i]);
             d->ep.dsp->ep_dma.ext_mem[0x0000 + ((off + i) * 2) + 1] = float_to_24b(mixbins[1][i]);
-            /* Pair 1 (FC / LFE): offset 0x0100 */
-            d->ep.dsp->ep_dma.ext_mem[0x0100 + ((off + i) * 2)]     = float_to_24b(mixbins[2][i]);
-            d->ep.dsp->ep_dma.ext_mem[0x0100 + ((off + i) * 2) + 1] = float_to_24b(mixbins[3][i]);
-            /* Pair 2 (RL / RR): offset 0x0200 */
-            d->ep.dsp->ep_dma.ext_mem[0x0200 + ((off + i) * 2)]     = float_to_24b(mixbins[4][i]);
-            d->ep.dsp->ep_dma.ext_mem[0x0200 + ((off + i) * 2) + 1] = float_to_24b(mixbins[5][i]);
+            /* Pair 1 (FC / LFE): offset 0x0200 (0x0200 - 0x03FF) */
+            d->ep.dsp->ep_dma.ext_mem[0x0200 + ((off + i) * 2)]     = float_to_24b(mixbins[2][i]);
+            d->ep.dsp->ep_dma.ext_mem[0x0200 + ((off + i) * 2) + 1] = float_to_24b(mixbins[3][i]);
+            /* Pair 2 (RL / RR): offset 0x0400 (0x0400 - 0x05FF) */
+            d->ep.dsp->ep_dma.ext_mem[0x0400 + ((off + i) * 2)]     = float_to_24b(mixbins[4][i]);
+            d->ep.dsp->ep_dma.ext_mem[0x0400 + ((off + i) * 2) + 1] = float_to_24b(mixbins[5][i]);
         }
     }
 
@@ -527,11 +535,14 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
         if (d->ep_frame_div % 8 == 0) {
             dsp_start_frame(d->ep.dsp);
             dsp_set_halt_requested(d->ep.dsp, false);
-            dsp_set_cycle_count(d->ep.dsp, 0);
             int ep_loops = 0;
             do {
                 dsp_step(d->ep.dsp);
                 ep_loops++;
+                uint32_t pc = dsp_get_pc(d->ep.dsp);
+                if ((pc == 0x000031 || pc == 0x000032) && !(d->ep.dsp->ep_dma.c5_reg & 0x02)) {
+                    break; /* Frame boundary reached; yield until next frame */
+                }
             } while (!dsp_get_halt_requested(d->ep.dsp) && ep_loops < 50000);
             g_dbg.ep.cycles = dsp_get_cycle_count(d->ep.dsp);
         }

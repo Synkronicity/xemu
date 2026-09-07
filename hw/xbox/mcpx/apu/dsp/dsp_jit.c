@@ -143,6 +143,13 @@ static void dsp_jit_invalidate_opcache(DSPState *dsp)
     dsp56300_invalidate_cache(jit_be(dsp)->jit);
 }
 
+static uint32_t dsp_jit_get_pc(DSPState *dsp)
+{
+    Dsp56300State ss;
+    dsp56300_get_state(jit_be(dsp)->jit, &ss);
+    return ss.pc;
+}
+
 /*
  * Sync: JIT -> DspCoreState (before VM save / debug)
  */
@@ -349,6 +356,7 @@ const DSPOps jit_dsp_ops = {
     .finalize = dsp_jit_finalize,
     .reset = dsp_jit_reset,
     .step = dsp_jit_step,
+    .get_pc = dsp_jit_get_pc,
     .run = dsp_jit_run,
     .bootstrap = dsp_jit_bootstrap,
     .start_frame = dsp_start_frame_impl,
