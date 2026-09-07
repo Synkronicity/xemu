@@ -897,9 +897,9 @@ static void dsp_postexecute_interrupts(dsp_core_t* dsp)
 
 static uint32_t read_memory_p(dsp_core_t *core, uint32_t address)
 {
-    /* P-ROM Space (0x004000 - 0x009FFF): Decoupled bootstrap/ROM routines */
-    if (address >= 0x004000 && address <= 0x009FFF) {
-        return 0x00000C; /* RTS */
+    /* Motorola DSP56362 Internal P-ROM is strictly at 0x007000 - 0x007FFF */
+    if (address >= 0x007000 && address <= 0x007FFF) {
+        return 0x00000C; /* RTS stub for unmapped factory ROM routines */
     }
 
     if (address >= DSP_PRAM_SIZE) {
@@ -1116,8 +1116,12 @@ static void dsp_stack_pop(dsp_core_t* dsp, uint32_t *newpc, uint32_t *newsr)
 {
     uint32_t sp = dsp->registers[DSP_REG_SP] & BITMASK(4);
     if (sp == 0) {
-        fprintf(stderr, "[STACK UNDERFLOW WARNING] Attempted dsp_stack_pop with SP == 0 at PC 0x%06X\n", dsp->pc);
-        if (newpc) *newpc = 0;
+        static uint32_t last_warn_pc = 0xFFFFFFFF;
+        if (dsp->pc != last_warn_pc) {
+            fprintf(stderr, "[STACK UNDERFLOW WARNING] Attempted dsp_stack_pop with SP == 0 at PC 0x%06X\n", dsp->pc);
+            last_warn_pc = dsp->pc;
+        }
+        if (newpc) *newpc = dsp->pc + 1;
         if (newsr) *newsr = dsp->registers[DSP_REG_SR];
         return;
     }
