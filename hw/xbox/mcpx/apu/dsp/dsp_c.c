@@ -153,12 +153,13 @@ static void dsp_c_write_memory(DSPState *dsp, char space, uint32_t address,
 
 static bool dsp_c_get_halt_requested(DSPState *dsp)
 {
-    return c_core(dsp)->is_idle;
+    return c_core(dsp)->is_idle || c_core(dsp)->halt_requested;
 }
 
 static void dsp_c_set_halt_requested(DSPState *dsp, bool halt)
 {
     c_core(dsp)->is_idle = halt;
+    c_core(dsp)->halt_requested = halt;
 }
 
 static uint32_t dsp_c_get_cycle_count(DSPState *dsp)
@@ -261,6 +262,7 @@ void dsp_c_init(DSPState *dsp)
 {
     dsp_core_t *core = g_new0(dsp_core_t, 1);
     core->opaque = dsp;
+    core->is_gp = dsp->is_gp;
     core->read_peripheral = c_read_peripheral;
     core->write_peripheral = c_write_peripheral;
 
@@ -277,7 +279,11 @@ void dsp_c_init(DSPState *dsp)
      * will be overwritten by the subsequent sync_from_vm. */
     dsp56k_reset_cpu(core);
 
-    memset(core->pram, 0xCA, DSP_PRAM_SIZE * sizeof(uint32_t));
+    if (dsp->is_gp) {
+        memset(core->pram, 0xCA, DSP_PRAM_SIZE * sizeof(uint32_t));
+    } else {
+        memset(core->pram, 0, DSP_PRAM_SIZE * sizeof(uint32_t));
+    }
     memset(core->xram, 0xCA, DSP_XRAM_SIZE * sizeof(uint32_t));
     memset(core->yram, 0xCA, DSP_YRAM_SIZE * sizeof(uint32_t));
     dsp->ops->invalidate_opcache(dsp);

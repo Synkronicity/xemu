@@ -898,9 +898,15 @@ static void dsp_postexecute_interrupts(dsp_core_t* dsp)
 static uint32_t read_memory_p(dsp_core_t *core, uint32_t address)
 {
     if (address >= DSP_PRAM_SIZE) {
-        fprintf(stderr, "[FATAL PRAM FAULT] Target Address: 0x%06X | DSP_PRAM_SIZE: 0x%06X (%u words) | Faulting PC: 0x%06X\n",
-                address, DSP_PRAM_SIZE, DSP_PRAM_SIZE, core->pc);
-        assert(address < DSP_PRAM_SIZE);
+        static uint32_t last_fault_pc = 0xFFFFFFFF;
+        if (core->pc != last_fault_pc) {
+            fprintf(stderr, "[PRAM FAULT] %s: Read at 0x%06X exceeds DSP_PRAM_SIZE (0x%06X) at PC 0x%06X. Halting core.\n",
+                    core->is_gp ? "GP" : "EP", address, DSP_PRAM_SIZE, core->pc);
+            last_fault_pc = core->pc;
+        }
+        core->halt_requested = true;
+        core->is_idle = true;
+        return 0x000000;
     }
 
     return core->pram[address];
@@ -967,7 +973,11 @@ static void write_memory_raw(dsp_core_t* dsp, int space, uint32_t address, uint3
         assert(address < DSP_YRAM_SIZE);
         dsp->yram[address] = value;
     } else if (space == DSP_SPACE_P) {
-        assert(address < DSP_PRAM_SIZE);
+        if (address >= DSP_PRAM_SIZE) {
+            fprintf(stderr, "[PRAM FAULT] %s: Write at 0x%06X exceeds DSP_PRAM_SIZE (0x%06X)\n",
+                    dsp->is_gp ? "GP" : "EP", address, DSP_PRAM_SIZE);
+            return;
+        }
         stl_le_p(&dsp->pram[address], value);
         dsp->pram_opcache[address] = NULL;
     } else {

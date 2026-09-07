@@ -48,6 +48,7 @@ typedef struct dsp_core_s dsp_core_t;
 struct dsp_core_s {
     bool is_gp;
     bool is_idle;
+    bool halt_requested;
     uint32_t cycle_count;
 
     /* DSP instruction Cycle counter */

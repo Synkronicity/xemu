@@ -467,7 +467,12 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
         }
     }
 
-    bool ep_enabled = (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
+    /* Gating: EP must be released from reset AND have firmware loaded at P:0 */
+    uint32_t ep_reset_vector = dsp_read_memory(d->ep.dsp, 'P', 0);
+
+    bool ep_has_firmware = (ep_reset_vector != 0x000000);
+    bool ep_enabled = ep_has_firmware &&
+                      (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
                       (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPDSPRST);
 
     /* Run GP */
