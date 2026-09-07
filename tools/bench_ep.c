@@ -52,13 +52,43 @@ static uint32_t bench_read_peripheral(dsp_core_t *core, uint32_t address)
     return 0x000000;
 }
 
+#define APU_EXT_MEM_SIZE 16384
+static uint32_t apu_ext_mem[APU_EXT_MEM_SIZE];
+
 static uint32_t dma_src_addr = 0;
 static uint32_t dma_dst_addr = 0;
 
+static uint32_t read_dma_word(dsp_core_t *core, uint32_t addr)
+{
+    if (addr >= 0x004000 && (addr - 0x004000) < APU_EXT_MEM_SIZE) {
+        return apu_ext_mem[addr - 0x004000];
+    }
+    if (addr < DSP_XRAM_SIZE) {
+        return dsp56k_read_memory(core, DSP_SPACE_X, addr);
+    }
+    return 0;
+}
+
+static void write_dma_word(dsp_core_t *core, uint32_t addr, uint32_t val)
+{
+    if (addr >= 0x004000 && (addr - 0x004000) < APU_EXT_MEM_SIZE) {
+        apu_ext_mem[addr - 0x004000] = val;
+        return;
+    }
+    if (addr < DSP_XRAM_SIZE) {
+        dsp56k_write_memory(core, DSP_SPACE_X, addr, val);
+    }
+}
+
 static void bench_write_peripheral(dsp_core_t *core, uint32_t address, uint32_t value)
 {
-    if (address == 0xFFFFD5) dma_src_addr = value & 0xFFFFFF;
-    if (address == 0xFFFFD4) dma_dst_addr = value & 0xFFFFFF;
+    /* Motorola DSP56362 DMA Register Definitions:
+     * 0xFFFFD4: DSR0 (DMA Source Address Register 0)
+     * 0xFFFFD5: DDR0 (DMA Destination Address Register 0)
+     * 0xFFFFD6: DCO0 / DCR0 (DMA Control Register 0)
+     */
+    if (address == 0xFFFFD4) dma_src_addr = value & 0xFFFFFF;
+    if (address == 0xFFFFD5) dma_dst_addr = value & 0xFFFFFF;
 
     if (address == 0xFFFFD6) {
         dma_control_reg = value & 0xFFFFFF;
@@ -67,14 +97,10 @@ static void bench_write_peripheral(dsp_core_t *core, uint32_t address, uint32_t 
             printf("[DMA TRIGGER] Src: 0x%06X -> Dst: 0x%06X | Ctrl: 0x%06X (PC: 0x%06X, Cycle: %" PRIu64 ")\n",
                    dma_src_addr, dma_dst_addr, dma_control_reg, core->pc, (uint64_t)core->cycle_count);
 
-            /* Active DMA Copy: Transfer 64 words from Src to Dst if within X-RAM bounds */
-            if (dma_src_addr < DSP_XRAM_SIZE && dma_dst_addr < DSP_XRAM_SIZE) {
-                for (uint32_t i = 0; i < 64; i++) {
-                    if ((dma_src_addr + i < DSP_XRAM_SIZE) && (dma_dst_addr + i < DSP_XRAM_SIZE)) {
-                        uint32_t val = dsp56k_read_memory(core, DSP_SPACE_X, dma_src_addr + i);
-                        dsp56k_write_memory(core, DSP_SPACE_X, dma_dst_addr + i, val);
-                    }
-                }
+            /* Active DMA Copy: Transfer 64 words from Source to Destination */
+            for (uint32_t i = 0; i < 64; i++) {
+                uint32_t val = read_dma_word(core, dma_src_addr + i);
+                write_dma_word(core, dma_dst_addr + i, val);
             }
         }
     }
@@ -298,18 +324,27 @@ int main(int argc, char *argv[])
     dsp56k_write_memory(&core, DSP_SPACE_X, 0x000BC2, 0x000300); /* Center / LFE */
     dsp56k_write_memory(&core, DSP_SPACE_X, 0x000BC3, 0x000300); /* Surround L/R */
 
-    /* Phase 59: Pre-load Distinct Signatures for All 6 Discrete Audio Channels */
-    printf("[*] Pre-loading 6-Channel Synthetic PCM Signatures into Apertures...\n");
+    /* Initialize external APU memory space */
+    memset(apu_ext_mem, 0, sizeof(apu_ext_mem));
+
+    /* Pre-load 6-Channel Synthetic PCM Signatures into External APU Aperture (0x004000) */
+    printf("[*] Pre-loading 6-Channel Synthetic PCM Signatures into External APU Aperture...\n");
     for (uint32_t i = 0; i < 32; i++) {
-        /* Pair 0: Front Left (0x11xxxx) & Front Right (0x22xxxx) at 0x0029A2 */
+        /* Pair 0: FL / FR */
+        apu_ext_mem[0x0000 + (i * 2)]     = 0x110000 | (i << 8);
+        apu_ext_mem[0x0000 + (i * 2) + 1] = 0x220000 | (i << 8);
         dsp56k_write_memory(&core, DSP_SPACE_X, 0x0029A2 + (i * 2),     0x110000 | (i << 8));
         dsp56k_write_memory(&core, DSP_SPACE_X, 0x0029A2 + (i * 2) + 1, 0x220000 | (i << 8));
 
-        /* Pair 1: Center (0x33xxxx) & LFE Subwoofer (0x44xxxx) at 0x002AA2 (Offset +0x100) */
+        /* Pair 1: Center / LFE */
+        apu_ext_mem[0x0100 + (i * 2)]     = 0x330000 | (i << 8);
+        apu_ext_mem[0x0100 + (i * 2) + 1] = 0x440000 | (i << 8);
         dsp56k_write_memory(&core, DSP_SPACE_X, 0x002AA2 + (i * 2),     0x330000 | (i << 8));
         dsp56k_write_memory(&core, DSP_SPACE_X, 0x002AA2 + (i * 2) + 1, 0x440000 | (i << 8));
 
-        /* Pair 2: Surround Left (0x55xxxx) & Surround Right (0x66xxxx) at 0x002BA2 (Offset +0x200) */
+        /* Pair 2: Surround Left / Surround Right */
+        apu_ext_mem[0x0200 + (i * 2)]     = 0x550000 | (i << 8);
+        apu_ext_mem[0x0200 + (i * 2) + 1] = 0x660000 | (i << 8);
         dsp56k_write_memory(&core, DSP_SPACE_X, 0x002BA2 + (i * 2),     0x550000 | (i << 8));
         dsp56k_write_memory(&core, DSP_SPACE_X, 0x002BA2 + (i * 2) + 1, 0x660000 | (i << 8));
     }
