@@ -505,11 +505,22 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
     /* Surround monitor buffer routing */
     if (d->is_5_1_active) {
         int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
-        uint32_t reset_vec =
-            dsp_read_memory(d->ep.dsp, 'P', 0x0000) & 0x00ffffff;
-        bool ep_active = ep_enabled && (reset_vec != 0 && reset_vec != 0x00cacaca);
 
-        if (ep_active) {
+        /* Check if discrete mixbins contain active audio samples this frame */
+        bool mixbins_active = false;
+        for (int ch = 0; ch < 6; ch++) {
+            for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+                if (mixbins[ch][i] != 0.0f) {
+                    mixbins_active = true;
+                    break;
+                }
+            }
+            if (mixbins_active) {
+                break;
+            }
+        }
+
+        if (mixbins_active) {
             /* Full 6-channel discrete surround from mixbins */
             for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
                 d->monitor.surround_buf[off + i][0] =
@@ -526,7 +537,7 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
                     (int16_t)(float_to_24b(mixbins[5][i]) >> 8);
             }
         } else {
-            /* Bootloader animation, ep_enabled == false, or stereo content: route to FL / FR and zero surround channels */
+            /* Discrete mixbins are silent; fallback to GP mixbuffer stereo for bootloader/intro */
             for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
                 uint32_t l = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + i);
                 uint32_t r = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + 0x20 + i);

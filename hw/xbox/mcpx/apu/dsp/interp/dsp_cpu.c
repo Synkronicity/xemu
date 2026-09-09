@@ -906,6 +906,8 @@ uint32_t dsp56k_read_memory(dsp_core_t* dsp, int space, uint32_t address)
             return dsp->mixbuffer[address-DSP_MIXBUFFER_BASE];
         } else if (address >= 0xc00 && address < 0xc00+DSP_MIXBUFFER_SIZE) {
             return dsp->mixbuffer[address-0xc00];
+        } else if (address >= 0x4000 && address < 0x6000) {
+            return 0; /* EP external aperture read */
         } else {
             if (address < DSP_XRAM_SIZE) {
                 return dsp->xram[address];
@@ -947,6 +949,9 @@ static void write_memory_raw(dsp_core_t* dsp, int space, uint32_t address, uint3
             dsp->mixbuffer[address-DSP_MIXBUFFER_BASE] = value;
         } else if (address >= 0xc00 && address < 0xc00+DSP_MIXBUFFER_SIZE) {
             dsp->mixbuffer[address-0xc00] = value;
+        } else if (address >= 0x4000 && address < 0x6000) {
+            /* EP external memory aperture write - safely accept */
+            return;
         } else {
             assert(address < DSP_XRAM_SIZE);
             dsp->xram[address] = value;
