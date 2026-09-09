@@ -465,36 +465,38 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
         } while (!dsp_get_halt_requested(d->gp.dsp) && d->gp.realtime);
         g_dbg.gp.cycles = dsp_get_cycle_count(d->gp.dsp);
 
-        /* Multichannel 512-word (0x0200) stride mapping across the 6 discrete mixbins */
-        uint32_t discrete_samples[6][NUM_SAMPLES_PER_FRAME];
-        for (int ch = 0; ch < 6; ch++) {
-            uint32_t channel_base = 0x1400 + (ch * 0x0200);
-            for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
-                discrete_samples[ch][i] =
-                    dsp_read_memory(d->gp.dsp, 'X', channel_base + i);
-            }
-        }
-
-        /* Forward discrete mixbin strides to EP aperture (X:0x4000) */
-        if (ep_enabled) {
-            for (int ch = 0; ch < 6; ch++) {
-                uint32_t ep_base = 0x4000 + (ch * 0x0200);
-                for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
-                    dsp_write_memory(d->ep.dsp, 'X', ep_base + i,
-                                     discrete_samples[ch][i]);
-                }
-            }
-        }
-
         if ((d->monitor.point == MCPX_APU_DEBUG_MON_GP) ||
             (d->monitor.point == MCPX_APU_DEBUG_MON_GP_OR_EP && !ep_enabled)) {
             int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
             for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
-                d->monitor.frame_buf[off + i][0] =
-                    (int16_t)(discrete_samples[0][i] >> 8);
-                d->monitor.frame_buf[off + i][1] =
-                    (int16_t)(discrete_samples[1][i] >> 8);
+                uint32_t l = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + i);
+                d->monitor.frame_buf[off + i][0] = (int16_t)(l >> 8);
+                uint32_t r = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + 0x20 + i);
+                d->monitor.frame_buf[off + i][1] = (int16_t)(r >> 8);
             }
+        }
+    }
+
+    /* Forward multichannel PCM blocks to EP aperture (X:0x4000) using 512-word (0x0200) strides per pair */
+    if (ep_enabled) {
+        int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
+        for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+            int sample_idx = (off + i) * 2;
+            /* Pair 0 (FL / FR): offset 0x0000 */
+            dsp_write_memory(d->ep.dsp, 'X', 0x4000 + 0 * 0x0200 + sample_idx,
+                             float_to_24b(mixbins[0][i]));
+            dsp_write_memory(d->ep.dsp, 'X', 0x4000 + 0 * 0x0200 + sample_idx + 1,
+                             float_to_24b(mixbins[1][i]));
+            /* Pair 1 (FC / LFE): offset 0x0200 */
+            dsp_write_memory(d->ep.dsp, 'X', 0x4000 + 1 * 0x0200 + sample_idx,
+                             float_to_24b(mixbins[2][i]));
+            dsp_write_memory(d->ep.dsp, 'X', 0x4000 + 1 * 0x0200 + sample_idx + 1,
+                             float_to_24b(mixbins[3][i]));
+            /* Pair 2 (RL / RR): offset 0x0400 */
+            dsp_write_memory(d->ep.dsp, 'X', 0x4000 + 2 * 0x0200 + sample_idx,
+                             float_to_24b(mixbins[4][i]));
+            dsp_write_memory(d->ep.dsp, 'X', 0x4000 + 2 * 0x0200 + sample_idx + 1,
+                             float_to_24b(mixbins[5][i]));
         }
     }
 
@@ -526,13 +528,15 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
                 unpopulated_frames++;
             }
 
-            dsp_start_frame(d->ep.dsp);
-            dsp_set_halt_requested(d->ep.dsp, false);
-            dsp_set_cycle_count(d->ep.dsp, 0);
-            do {
-                dsp_run(d->ep.dsp, 1000);
-            } while (!dsp_get_halt_requested(d->ep.dsp) && d->ep.realtime);
-            g_dbg.ep.cycles = dsp_get_cycle_count(d->ep.dsp);
+            if (reset_vec != 0 && reset_vec != 0x00cacaca) {
+                dsp_start_frame(d->ep.dsp);
+                dsp_set_halt_requested(d->ep.dsp, false);
+                dsp_set_cycle_count(d->ep.dsp, 0);
+                do {
+                    dsp_run(d->ep.dsp, 1000);
+                } while (!dsp_get_halt_requested(d->ep.dsp) && d->ep.realtime);
+                g_dbg.ep.cycles = dsp_get_cycle_count(d->ep.dsp);
+            }
         }
     }
 }

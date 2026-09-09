@@ -117,6 +117,7 @@ void dsp_step(DSPState *dsp);
 void dsp_run(DSPState *dsp, int cycles);
 
 void dsp_bootstrap(DSPState *dsp);
+bool dsp_bootstrap_ep_firmware(DSPState *dsp);
 void dsp_start_frame(DSPState *dsp);
 
 uint32_t dsp_read_memory(DSPState *dsp, char space, uint32_t addr);
