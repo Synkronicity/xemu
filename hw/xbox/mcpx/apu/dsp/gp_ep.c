@@ -465,14 +465,16 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
         } while (!dsp_get_halt_requested(d->gp.dsp) && d->gp.realtime);
         g_dbg.gp.cycles = dsp_get_cycle_count(d->gp.dsp);
 
-        if ((d->monitor.point == MCPX_APU_DEBUG_MON_GP) ||
-            (d->monitor.point == MCPX_APU_DEBUG_MON_GP_OR_EP && (!ep_enabled || !d->is_5_1_active))) {
-            int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
-            for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
-                uint32_t l = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + i);
-                d->monitor.frame_buf[off + i][0] = (int16_t)(l >> 8);
-                uint32_t r = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + 0x20 + i);
-                d->monitor.frame_buf[off + i][1] = (int16_t)(r >> 8);
+        if (!d->is_5_1_active) {
+            if ((d->monitor.point == MCPX_APU_DEBUG_MON_GP) ||
+                (d->monitor.point == MCPX_APU_DEBUG_MON_GP_OR_EP)) {
+                int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
+                for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+                    uint32_t l = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + i);
+                    d->monitor.frame_buf[off + i][0] = (int16_t)(l >> 8);
+                    uint32_t r = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + 0x20 + i);
+                    d->monitor.frame_buf[off + i][1] = (int16_t)(r >> 8);
+                }
             }
         }
     }
@@ -500,12 +502,15 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
         }
     }
 
-    /* Scrape 6 discrete channels to surround monitor buffer when surround is active and EP firmware is present */
-    if (d->is_5_1_active && ep_enabled) {
+    /* Surround monitor buffer routing */
+    if (d->is_5_1_active) {
+        int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
         uint32_t reset_vec =
             dsp_read_memory(d->ep.dsp, 'P', 0x0000) & 0x00ffffff;
-        if (reset_vec != 0 && reset_vec != 0x00cacaca) {
-            int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
+        bool ep_active = ep_enabled && (reset_vec != 0 && reset_vec != 0x00cacaca);
+
+        if (ep_active) {
+            /* Full 6-channel discrete surround from mixbins */
             for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
                 d->monitor.surround_buf[off + i][0] =
                     (int16_t)(float_to_24b(mixbins[0][i]) >> 8);
@@ -519,6 +524,18 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
                     (int16_t)(float_to_24b(mixbins[4][i]) >> 8);
                 d->monitor.surround_buf[off + i][5] =
                     (int16_t)(float_to_24b(mixbins[5][i]) >> 8);
+            }
+        } else {
+            /* Bootloader animation, ep_enabled == false, or stereo content: route to FL / FR and zero surround channels */
+            for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+                uint32_t l = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + i);
+                uint32_t r = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + 0x20 + i);
+                d->monitor.surround_buf[off + i][0] = (int16_t)(l >> 8);
+                d->monitor.surround_buf[off + i][1] = (int16_t)(r >> 8);
+                d->monitor.surround_buf[off + i][2] = 0;
+                d->monitor.surround_buf[off + i][3] = 0;
+                d->monitor.surround_buf[off + i][4] = 0;
+                d->monitor.surround_buf[off + i][5] = 0;
             }
         }
     }

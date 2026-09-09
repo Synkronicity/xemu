@@ -22,6 +22,7 @@
 void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
 {
     bool eeprom_wants_surround = false;
+    uint32_t audio_flags = 0;
     const char *eeprom_path = g_config.sys.files.eeprom_path;
     if (!eeprom_path || !eeprom_path[0]) {
         eeprom_path = xemu_settings_get_default_eeprom_path();
@@ -29,10 +30,10 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
     if (eeprom_path) {
         FILE *fp = fopen(eeprom_path, "rb");
         if (fp) {
-            uint8_t user_section[156];
-            if (fseek(fp, 0x60, SEEK_SET) == 0 &&
-                fread(user_section, sizeof(user_section), 1, fp) == 1) {
-                uint32_t audio_flags = le32_to_cpu(*(uint32_t *)(user_section + 0x2C));
+            /* User section starts at offset 0x64 in Xbox EEPROM; audio flags at offset 0x2C (file offset 0x90) */
+            if (fseek(fp, 0x64 + 0x2C, SEEK_SET) == 0 &&
+                fread(&audio_flags, sizeof(audio_flags), 1, fp) == 1) {
+                audio_flags = le32_to_cpu(audio_flags);
                 if ((audio_flags & 0x00010000) || (audio_flags & 0x00020000) ||
                     ((audio_flags & 0xFFFF) == 2)) {
                     eeprom_wants_surround = true;
@@ -43,9 +44,14 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
     }
 
     const char *env_surround = getenv("XEMU_SURROUND");
+    bool surround_requested = eeprom_wants_surround;
     if (env_surround && (strcmp(env_surround, "1") == 0 || strcasecmp(env_surround, "true") == 0)) {
-        eeprom_wants_surround = true;
+        surround_requested = true;
     }
+
+    fprintf(stderr,
+            "[APU MONITOR] EEPROM audio flags: 0x%08X (Surround requested: %s)\n",
+            audio_flags, surround_requested ? "yes" : "no");
 
     /* Firmware-gated surround activation: verify EP P-RAM is populated */
     uint32_t reset_vec = dsp_read_memory(d->ep.dsp, 'P', 0x0000) & 0x00FFFFFF;
@@ -55,12 +61,12 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
     }
 
     bool fw_present = (reset_vec != 0 && reset_vec != 0x00CACACA);
-    d->is_5_1_active = (eeprom_wants_surround && fw_present);
+    d->is_5_1_active = (surround_requested && fw_present);
 
     fprintf(stderr, "[APU MONITOR] Audio mode: %s (%d channels)%s\n",
             d->is_5_1_active ? "5.1 Surround" : "Stereo",
             d->is_5_1_active ? 6 : 2,
-            (!fw_present && eeprom_wants_surround) ? " [Fallback: EP firmware missing]" : "");
+            (!fw_present && surround_requested) ? " [Fallback: EP firmware missing]" : "");
 
     SDL_AudioSpec spec = {
         .freq = 48000,
