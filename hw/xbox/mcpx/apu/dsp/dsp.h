@@ -47,6 +47,7 @@ typedef struct DSPOps {
     void (*set_halt_requested)(DSPState *dsp, bool idle);
     uint32_t (*get_cycle_count)(DSPState *dsp);
     void (*set_cycle_count)(DSPState *dsp, uint32_t count);
+    uint32_t (*get_pc)(DSPState *dsp);
     void (*invalidate_opcache)(DSPState *dsp);
     void (*sync_to_vm)(DSPState *dsp);
     void (*sync_from_vm)(DSPState *dsp);
@@ -127,6 +128,7 @@ bool dsp_get_halt_requested(DSPState *dsp);
 void dsp_set_halt_requested(DSPState *dsp, bool idle);
 uint32_t dsp_get_cycle_count(DSPState *dsp);
 void dsp_set_cycle_count(DSPState *dsp, uint32_t count);
+uint32_t dsp_get_pc(DSPState *dsp);
 void dsp_invalidate_opcache(DSPState *dsp);
 
 /* Backend synchronization - sync backend state to/from DspCoreState */

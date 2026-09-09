@@ -87,13 +87,15 @@ static void dsp_jit_bootstrap(DSPState *dsp)
 {
     JitBackend *be = jit_be(dsp);
 
-    /* Load scratch memory into PRAM (C-side owned buffer) */
-    dsp->dma.scratch_rw(dsp->dma.rw_opaque, (uint8_t *)be->pram, 0, 0x800 * 4,
-                        false);
-    for (int i = 0; i < 0x800; i++) {
-        if (be->pram[i] & 0xff000000) {
-            DPRINTF("Bootstrap %04x: %08x\n", i, be->pram[i]);
-            be->pram[i] &= 0x00ffffff;
+    if (dsp->is_gp) {
+        /* Load scratch memory into PRAM (C-side owned buffer) */
+        dsp->dma.scratch_rw(dsp->dma.rw_opaque, (uint8_t *)be->pram, 0, 0x800 * 4,
+                            false);
+        for (int i = 0; i < 0x800; i++) {
+            if (be->pram[i] & 0xff000000) {
+                DPRINTF("Bootstrap %04x: %08x\n", i, be->pram[i]);
+                be->pram[i] &= 0x00ffffff;
+            }
         }
     }
     dsp56300_invalidate_cache(be->jit);
@@ -134,6 +136,13 @@ static uint32_t dsp_jit_get_cycle_count(DSPState *dsp)
 static void dsp_jit_set_cycle_count(DSPState *dsp, uint32_t count)
 {
     dsp56300_set_cycle_count(jit_be(dsp)->jit, count);
+}
+
+static uint32_t dsp_jit_get_pc(DSPState *dsp)
+{
+    Dsp56300State ss;
+    dsp56300_get_state(jit_be(dsp)->jit, &ss);
+    return ss.pc;
 }
 
 static void dsp_jit_invalidate_opcache(DSPState *dsp)
@@ -356,6 +365,7 @@ const DSPOps jit_dsp_ops = {
     .set_halt_requested = dsp_jit_set_halt_requested,
     .get_cycle_count = dsp_jit_get_cycle_count,
     .set_cycle_count = dsp_jit_set_cycle_count,
+    .get_pc = dsp_jit_get_pc,
     .invalidate_opcache = dsp_jit_invalidate_opcache,
     .sync_to_vm = dsp_jit_sync_to_vm,
     .sync_from_vm = dsp_jit_sync_from_vm,

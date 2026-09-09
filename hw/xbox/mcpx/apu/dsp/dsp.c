@@ -195,6 +195,11 @@ void dsp_set_cycle_count(DSPState *dsp, uint32_t count)
     dsp->ops->set_cycle_count(dsp, count);
 }
 
+uint32_t dsp_get_pc(DSPState *dsp)
+{
+    return dsp->ops->get_pc ? dsp->ops->get_pc(dsp) : 0;
+}
+
 void dsp_invalidate_opcache(DSPState *dsp)
 {
     dsp->ops->invalidate_opcache(dsp);
