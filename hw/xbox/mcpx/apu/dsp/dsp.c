@@ -174,7 +174,11 @@ bool dsp_bootstrap_ep_firmware(DSPState *dsp)
     }
 
     if (!f) {
-        fprintf(stderr, "[APU EP] Notice: dolby_ep.bin not found, running without EP firmware\n");
+        static bool warned = false;
+        if (!warned) {
+            fprintf(stderr, "[APU EP] Notice: dolby_ep.bin not found, running without EP firmware\n");
+            warned = true;
+        }
         return false;
     }
 
