@@ -30,12 +30,23 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
     if (eeprom_path) {
         FILE *fp = fopen(eeprom_path, "rb");
         if (fp) {
-            /* User section starts at offset 0x64 in Xbox EEPROM; audio flags at offset 0x2C (file offset 0x90) */
-            if (fseek(fp, 0x64 + 0x2C, SEEK_SET) == 0 &&
-                fread(&audio_flags, sizeof(audio_flags), 1, fp) == 1) {
-                audio_flags = le32_to_cpu(audio_flags);
-                if ((audio_flags & 0x00010000) || (audio_flags & 0x00020000) ||
-                    ((audio_flags & 0xFFFF) == 2)) {
+            uint32_t user_block[4] = {0};
+            if (fseek(fp, 0x90, SEEK_SET) == 0 &&
+                fread(user_block, sizeof(uint32_t), 4, fp) == 4) {
+                user_block[0] = le32_to_cpu(user_block[0]);
+                user_block[1] = le32_to_cpu(user_block[1]);
+                user_block[2] = le32_to_cpu(user_block[2]);
+                user_block[3] = le32_to_cpu(user_block[3]);
+
+                fprintf(stderr,
+                        "[APU MONITOR] EEPROM Config Block: [0x90]=0x%08X [0x94]=0x%08X [0x98]=0x%08X [0x9C]=0x%08X\n",
+                        user_block[0], user_block[1], user_block[2], user_block[3]);
+
+                audio_flags = user_block[2];
+                if ((audio_flags & 0x00010000) || (audio_flags & 0x00000002)) {
+                    eeprom_wants_surround = true;
+                } else if ((user_block[3] & 0x00010000) || (user_block[3] & 0x00000002)) {
+                    audio_flags = user_block[3];
                     eeprom_wants_surround = true;
                 }
             }
@@ -44,10 +55,10 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
     }
 
     const char *env_surround = getenv("XEMU_SURROUND");
-    bool surround_requested = eeprom_wants_surround;
-    if (env_surround && (strcmp(env_surround, "1") == 0 || strcasecmp(env_surround, "true") == 0)) {
-        surround_requested = true;
-    }
+    bool env_wants_surround = env_surround &&
+                              strcmp(env_surround, "0") != 0 &&
+                              strcasecmp(env_surround, "false") != 0;
+    bool surround_requested = eeprom_wants_surround || env_wants_surround;
 
     fprintf(stderr,
             "[APU MONITOR] EEPROM audio flags: 0x%08X (Surround requested: %s)\n",

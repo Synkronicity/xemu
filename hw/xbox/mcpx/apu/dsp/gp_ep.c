@@ -466,15 +466,12 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
         g_dbg.gp.cycles = dsp_get_cycle_count(d->gp.dsp);
 
         if (!d->is_5_1_active) {
-            if ((d->monitor.point == MCPX_APU_DEBUG_MON_GP) ||
-                (d->monitor.point == MCPX_APU_DEBUG_MON_GP_OR_EP)) {
-                int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
-                for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
-                    uint32_t l = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + i);
-                    d->monitor.frame_buf[off + i][0] = (int16_t)(l >> 8);
-                    uint32_t r = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + 0x20 + i);
-                    d->monitor.frame_buf[off + i][1] = (int16_t)(r >> 8);
-                }
+            int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
+            for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+                uint32_t l = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + i);
+                d->monitor.frame_buf[off + i][0] = (int16_t)(l >> 8);
+                uint32_t r = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + 0x20 + i);
+                d->monitor.frame_buf[off + i][1] = (int16_t)(r >> 8);
             }
         }
     }
@@ -506,21 +503,7 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
     if (d->is_5_1_active) {
         int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
 
-        /* Check if discrete mixbins contain active audio samples this frame */
-        bool mixbins_active = false;
-        for (int ch = 0; ch < 6; ch++) {
-            for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
-                if (mixbins[ch][i] != 0.0f) {
-                    mixbins_active = true;
-                    break;
-                }
-            }
-            if (mixbins_active) {
-                break;
-            }
-        }
-
-        if (mixbins_active) {
+        if (ep_enabled) {
             /* Full 6-channel discrete surround from mixbins */
             for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
                 d->monitor.surround_buf[off + i][0] =
@@ -537,7 +520,7 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
                     (int16_t)(float_to_24b(mixbins[5][i]) >> 8);
             }
         } else {
-            /* Discrete mixbins are silent; fallback to GP mixbuffer stereo for bootloader/intro */
+            /* Bootloader intro (!ep_enabled): mirror GP mixbuffer to FL/FR and zero surround channels */
             for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
                 uint32_t l = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + i);
                 uint32_t r = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + 0x20 + i);
