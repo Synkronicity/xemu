@@ -465,15 +465,35 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
         } while (!dsp_get_halt_requested(d->gp.dsp) && d->gp.realtime);
         g_dbg.gp.cycles = dsp_get_cycle_count(d->gp.dsp);
 
+        /* Multichannel 512-word (0x0200) stride mapping across the 6 discrete mixbins */
+        uint32_t discrete_samples[6][NUM_SAMPLES_PER_FRAME];
+        for (int ch = 0; ch < 6; ch++) {
+            uint32_t channel_base = 0x1400 + (ch * 0x0200);
+            for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+                discrete_samples[ch][i] =
+                    dsp_read_memory(d->gp.dsp, 'X', channel_base + i);
+            }
+        }
+
+        /* Forward discrete mixbin strides to EP aperture (X:0x4000) */
+        if (ep_enabled) {
+            for (int ch = 0; ch < 6; ch++) {
+                uint32_t ep_base = 0x4000 + (ch * 0x0200);
+                for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+                    dsp_write_memory(d->ep.dsp, 'X', ep_base + i,
+                                     discrete_samples[ch][i]);
+                }
+            }
+        }
+
         if ((d->monitor.point == MCPX_APU_DEBUG_MON_GP) ||
             (d->monitor.point == MCPX_APU_DEBUG_MON_GP_OR_EP && !ep_enabled)) {
             int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
             for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
-                uint32_t l = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + i);
-                d->monitor.frame_buf[off + i][0] = l >> 8;
-                uint32_t r =
-                    dsp_read_memory(d->gp.dsp, 'X', 0x1400 + 1 * 0x20 + i);
-                d->monitor.frame_buf[off + i][1] = r >> 8;
+                d->monitor.frame_buf[off + i][0] =
+                    (int16_t)(discrete_samples[0][i] >> 8);
+                d->monitor.frame_buf[off + i][1] =
+                    (int16_t)(discrete_samples[1][i] >> 8);
             }
         }
     }
@@ -482,6 +502,30 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
     if ((d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
         (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPDSPRST)) {
         if (d->ep_frame_div % 8 == 0) {
+            /* Guest DMA Litmus Test Probe */
+            uint32_t reset_vec =
+                dsp_read_memory(d->ep.dsp, 'P', 0x0000) & 0x00ffffff;
+            static uint32_t last_detected_vec = 0;
+            static uint32_t unpopulated_frames = 0;
+
+            if (reset_vec != 0x00cacaca && reset_vec != 0x00000000) {
+                if (reset_vec != last_detected_vec) {
+                    fprintf(stderr,
+                            "[EP LITMUS] Guest DMA Detected! Reset vector P:0x0000 = 0x%06X (PC: 0x%06X)\n",
+                            reset_vec, dsp_get_pc(d->ep.dsp));
+                    last_detected_vec = reset_vec;
+                }
+                unpopulated_frames = 0;
+            } else {
+                last_detected_vec = 0;
+                if (unpopulated_frames == 0 || (unpopulated_frames % 500 == 0)) {
+                    fprintf(stderr,
+                            "[EP LITMUS] P-RAM unpopulated by guest (P:0x0000 = 0x%06X)\n",
+                            reset_vec);
+                }
+                unpopulated_frames++;
+            }
+
             dsp_start_frame(d->ep.dsp);
             dsp_set_halt_requested(d->ep.dsp, false);
             dsp_set_cycle_count(d->ep.dsp, 0);

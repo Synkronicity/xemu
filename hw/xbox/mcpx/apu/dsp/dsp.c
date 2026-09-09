@@ -24,6 +24,9 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/bswap.h"
+#include "dsp_dma.h"
+#include "dsp.h"
 #include "dsp_internal.h"
 #include "trace.h"
 #include "ui/xemu-settings.h"
@@ -151,9 +154,92 @@ void dsp_run(DSPState *dsp, int cycles)
     dsp->ops->run(dsp, cycles);
 }
 
+bool dsp_bootstrap_ep_firmware(DSPState *dsp)
+{
+    const char *candidates[] = {
+        "./dolby_ep.bin",
+        "./tools/dolby_ep.bin",
+        "../tools/dolby_ep.bin",
+        NULL
+    };
+
+    FILE *f = NULL;
+    const char *found_path = NULL;
+    for (int i = 0; candidates[i] != NULL; i++) {
+        f = fopen(candidates[i], "rb");
+        if (f) {
+            found_path = candidates[i];
+            break;
+        }
+    }
+
+    if (!f) {
+        fprintf(stderr, "[APU EP] Notice: dolby_ep.bin not found, running without EP firmware\n");
+        return false;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (file_size <= 0) {
+        fprintf(stderr, "[APU EP] Warning: %s is empty\n", found_path);
+        fclose(f);
+        return false;
+    }
+
+    size_t total_words = file_size / 4;
+    if (total_words < (0xC8 + 0x17F)) {
+        fprintf(stderr, "[APU EP] Warning: %s is too small (%zu words, expected >= %d)\n",
+                found_path, total_words, 0xC8 + 0x17F);
+        fclose(f);
+        return false;
+    }
+
+    uint32_t *buf = g_malloc(total_words * sizeof(uint32_t));
+    if (fread(buf, sizeof(uint32_t), total_words, f) != total_words) {
+        fprintf(stderr, "[APU EP] Warning: Failed reading %s\n", found_path);
+        g_free(buf);
+        fclose(f);
+        return false;
+    }
+    fclose(f);
+
+    size_t idx = 0;
+
+    /* Segment 1: 0x0000 (0xC8 words) */
+    for (size_t i = 0; i < 0xC8 && idx < total_words; i++, idx++) {
+        uint32_t word = le32_to_cpu(buf[idx]);
+        dsp_write_memory(dsp, 'P', 0x0000 + i, word & 0x00FFFFFF);
+    }
+
+    /* Segment 2: 0x0180 (0x17F words) */
+    for (size_t i = 0; i < 0x17F && idx < total_words; i++, idx++) {
+        uint32_t word = le32_to_cpu(buf[idx]);
+        dsp_write_memory(dsp, 'P', 0x0180 + i, word & 0x00FFFFFF);
+    }
+
+    /* Segment 3: 0x0300 (remainder) */
+    for (size_t i = 0; idx < total_words; i++, idx++) {
+        uint32_t word = le32_to_cpu(buf[idx]);
+        dsp_write_memory(dsp, 'P', 0x0300 + i, word & 0x00FFFFFF);
+    }
+
+    dsp_invalidate_opcache(dsp);
+    g_free(buf);
+
+    fprintf(stderr, "[APU EP] Loaded %zu firmware words from %s into EP P-RAM\n",
+            total_words, found_path);
+    return true;
+}
+
 void dsp_bootstrap(DSPState *dsp)
 {
-    dsp->ops->bootstrap(dsp);
+    if (!dsp->is_gp) {
+        dsp_bootstrap_ep_firmware(dsp);
+    } else {
+        dsp->ops->bootstrap(dsp);
+    }
 }
 
 void dsp_start_frame(DSPState *dsp)
