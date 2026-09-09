@@ -307,10 +307,10 @@ static JitBackend *dsp_create_jit_backend(DSPState *dsp)
           .data = { .buffer = { .base = be->yram, .offset = 0 } } },
     };
 
-    /* P-space: PRAM [0, 0x1000) */
+    /* P-space: PRAM [0, DSP_PRAM_SIZE) */
     Dsp56300MemoryRegion p_regions[1] = {
         { .start = 0x0000,
-          .end = 0x1000,
+          .end = DSP_PRAM_SIZE,
           .kind = DSP56300_REGION_BUFFER,
           .data = { .buffer = { .base = be->pram, .offset = 0 } } },
     };

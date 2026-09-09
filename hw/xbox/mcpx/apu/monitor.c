@@ -21,10 +21,51 @@
 
 void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
 {
+    bool eeprom_wants_surround = false;
+    const char *eeprom_path = g_config.sys.files.eeprom_path;
+    if (!eeprom_path || !eeprom_path[0]) {
+        eeprom_path = xemu_settings_get_default_eeprom_path();
+    }
+    if (eeprom_path) {
+        FILE *fp = fopen(eeprom_path, "rb");
+        if (fp) {
+            uint8_t user_section[156];
+            if (fseek(fp, 0x60, SEEK_SET) == 0 &&
+                fread(user_section, sizeof(user_section), 1, fp) == 1) {
+                uint32_t audio_flags = le32_to_cpu(*(uint32_t *)(user_section + 0x2C));
+                if ((audio_flags & 0x00010000) || (audio_flags & 0x00020000) ||
+                    ((audio_flags & 0xFFFF) == 2)) {
+                    eeprom_wants_surround = true;
+                }
+            }
+            fclose(fp);
+        }
+    }
+
+    const char *env_surround = getenv("XEMU_SURROUND");
+    if (env_surround && (strcmp(env_surround, "1") == 0 || strcasecmp(env_surround, "true") == 0)) {
+        eeprom_wants_surround = true;
+    }
+
+    /* Firmware-gated surround activation: verify EP P-RAM is populated */
+    uint32_t reset_vec = dsp_read_memory(d->ep.dsp, 'P', 0x0000) & 0x00FFFFFF;
+    if (reset_vec == 0 || reset_vec == 0x00CACACA) {
+        dsp_bootstrap_ep_firmware(d->ep.dsp);
+        reset_vec = dsp_read_memory(d->ep.dsp, 'P', 0x0000) & 0x00FFFFFF;
+    }
+
+    bool fw_present = (reset_vec != 0 && reset_vec != 0x00CACACA);
+    d->is_5_1_active = (eeprom_wants_surround && fw_present);
+
+    fprintf(stderr, "[APU MONITOR] Audio mode: %s (%d channels)%s\n",
+            d->is_5_1_active ? "5.1 Surround" : "Stereo",
+            d->is_5_1_active ? 6 : 2,
+            (!fw_present && eeprom_wants_surround) ? " [Fallback: EP firmware missing]" : "");
+
     SDL_AudioSpec spec = {
         .freq = 48000,
         .format = SDL_AUDIO_S16LE,
-        .channels = 2,
+        .channels = d->is_5_1_active ? 6 : 2,
     };
 
     d->monitor.stream = NULL;
@@ -52,7 +93,8 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
                           SDL_AUDIO_BYTESIZE(spec.format) *
                           spec.freq / dev_spec.freq;
     }
-    int frame_bytes = sizeof(d->monitor.frame_buf);
+    int frame_bytes = d->is_5_1_active ? sizeof(d->monitor.surround_buf)
+                                       : sizeof(d->monitor.frame_buf);
     int drain = MAX(dev_drain_bytes, frame_bytes);
     d->monitor.queued_bytes_low = drain;
     d->monitor.queued_bytes_high = 3 * drain;
@@ -76,9 +118,15 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
     if (d->monitor.stream) {
         float vu = pow(fmax(0.0, fmin(g_config.audio.volume_limit, 1.0)), M_E);
         SDL_SetAudioStreamGain(d->monitor.stream, vu);
-        SDL_PutAudioStreamData(d->monitor.stream, d->monitor.frame_buf,
-                            sizeof(d->monitor.frame_buf));
+        if (d->is_5_1_active) {
+            SDL_PutAudioStreamData(d->monitor.stream, d->monitor.surround_buf,
+                                   sizeof(d->monitor.surround_buf));
+        } else {
+            SDL_PutAudioStreamData(d->monitor.stream, d->monitor.frame_buf,
+                                   sizeof(d->monitor.frame_buf));
+        }
     }
 
     memset(d->monitor.frame_buf, 0, sizeof(d->monitor.frame_buf));
+    memset(d->monitor.surround_buf, 0, sizeof(d->monitor.surround_buf));
 }

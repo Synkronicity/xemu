@@ -176,6 +176,13 @@ static void throttle(MCPXAPUState *d)
     throttle_update_debug(d, start_us);
     int queued_bytes = -1;
 
+    size_t frame_bytes = d->is_5_1_active ? sizeof(d->monitor.surround_buf)
+                                          : sizeof(d->monitor.frame_buf);
+    if (d->monitor.queued_bytes_low < (int)frame_bytes) {
+        d->monitor.queued_bytes_low = frame_bytes;
+        d->monitor.queued_bytes_high = 3 * frame_bytes;
+    }
+
     if (d->monitor.stream) {
         queued_bytes = SDL_GetAudioStreamQueued(d->monitor.stream);
         if (queued_bytes >= 0) {

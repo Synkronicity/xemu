@@ -466,7 +466,7 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
         g_dbg.gp.cycles = dsp_get_cycle_count(d->gp.dsp);
 
         if ((d->monitor.point == MCPX_APU_DEBUG_MON_GP) ||
-            (d->monitor.point == MCPX_APU_DEBUG_MON_GP_OR_EP && !ep_enabled)) {
+            (d->monitor.point == MCPX_APU_DEBUG_MON_GP_OR_EP && (!ep_enabled || !d->is_5_1_active))) {
             int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
             for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
                 uint32_t l = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + i);
@@ -497,6 +497,29 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
                              float_to_24b(mixbins[4][i]));
             dsp_write_memory(d->ep.dsp, 'X', 0x4000 + 2 * 0x0200 + sample_idx + 1,
                              float_to_24b(mixbins[5][i]));
+        }
+    }
+
+    /* Scrape 6 discrete channels to surround monitor buffer when surround is active and EP firmware is present */
+    if (d->is_5_1_active && ep_enabled) {
+        uint32_t reset_vec =
+            dsp_read_memory(d->ep.dsp, 'P', 0x0000) & 0x00ffffff;
+        if (reset_vec != 0 && reset_vec != 0x00cacaca) {
+            int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
+            for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+                d->monitor.surround_buf[off + i][0] =
+                    (int16_t)(float_to_24b(mixbins[0][i]) >> 8);
+                d->monitor.surround_buf[off + i][1] =
+                    (int16_t)(float_to_24b(mixbins[1][i]) >> 8);
+                d->monitor.surround_buf[off + i][2] =
+                    (int16_t)(float_to_24b(mixbins[2][i]) >> 8);
+                d->monitor.surround_buf[off + i][3] =
+                    (int16_t)(float_to_24b(mixbins[3][i]) >> 8);
+                d->monitor.surround_buf[off + i][4] =
+                    (int16_t)(float_to_24b(mixbins[4][i]) >> 8);
+                d->monitor.surround_buf[off + i][5] =
+                    (int16_t)(float_to_24b(mixbins[5][i]) >> 8);
+            }
         }
     }
 
@@ -550,6 +573,7 @@ void mcpx_apu_dsp_init(MCPXAPUState *d)
     d->ep.dsp = dsp_init(d, ep_scratch_rw, ep_fifo_rw, false);
     dsp_set_halt_requested(d->ep.dsp, false);
     dsp_set_cycle_count(d->ep.dsp, 0);
+    dsp_bootstrap(d->ep.dsp);
 
     /* Until DSP is more performant, a switch to decide whether or not we should
      * use the full audio pipeline or not.
