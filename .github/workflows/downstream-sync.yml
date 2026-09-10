@@ -7,7 +7,7 @@ on:
   workflow_dispatch: # Enables manual "Run workflow" button in GitHub UI
 
 jobs:
-  canary-build:
+  canary-build-windows:
     name: Sync Upstream & Compile Win64
     runs-on: ubuntu-latest
 
@@ -32,7 +32,6 @@ jobs:
       - name: Inspect Upstream APU Drift
         run: |
           echo "Checking if upstream/master modified the APU subsystem..."
-          # Three dots compares the common merge-base to upstream/master:
           APU_CHANGES=$(git diff --name-only HEAD...upstream/master -- hw/xbox/mcpx/apu/)
           if [ -n "$APU_CHANGES" ]; then
             echo "::warning title=APU Drift Detected::Upstream modified files in hw/xbox/mcpx/apu/:"
@@ -61,7 +60,7 @@ jobs:
             -w /xemu \
             -e CCACHE_DIR=/xemu/ccache \
             ghcr.io/xemu-project/xemu-win64-toolchain:latest \
-            ./build.sh -p win64-cross
+            bash -c "apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && ./build.sh -p win64-cross"
 
       - name: Package Release Artifact
         uses: actions/upload-artifact@v4
@@ -72,7 +71,26 @@ jobs:
 
   canary-build-linux:
     name: Sync Upstream & Compile Linux AppImage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+
+    env:
+      CCACHE_DIR: /tmp/xemu-ccache
+      CCACHE_MAXSIZE: 512M
+      LTO_CACHE_DIR: /tmp/xemu-lto-cache
+      LTO_CACHE_MAXSIZE: 512m
+      DEB_BUILD_MAINT_OPTIONS: optimize=-lto
+      DEB_CFLAGS_MAINT_APPEND: -gdwarf-4 -gstrict-dwarf
+      DEB_CXXFLAGS_MAINT_APPEND: -gdwarf-4 -gstrict-dwarf
+      DEB_LDFLAGS_MAINT_APPEND: -Wl,--build-id=sha1
+      CC: ccache clang-21
+      CXX: ccache clang++-21
+      CC_LD: lld-21
+      CXX_LD: lld-21
+      AR: llvm-ar-21
+      RANLIB: llvm-ranlib-21
+      NM: llvm-nm-21
+      XEMU_BUILD_OPTIONS: --extra-ldflags=-Wl,--thinlto-cache-policy=cache_size_bytes=512m -Db_lto=true -Db_lto_mode=thin -Db_thinlto_cache=true -Db_thinlto_cache_dir=/tmp/xemu-lto-cache -Dx86_version=3
+      APPIMAGE_EXTRACT_AND_RUN: 1
 
     steps:
       - name: Checkout Downstream Branch
@@ -95,12 +113,10 @@ jobs:
       - name: Inspect Upstream APU Drift
         run: |
           echo "Checking if upstream/master modified the APU subsystem..."
-          # Three dots compares the common merge-base to upstream/master:
           APU_CHANGES=$(git diff --name-only HEAD...upstream/master -- hw/xbox/mcpx/apu/)
           if [ -n "$APU_CHANGES" ]; then
             echo "::warning title=APU Drift Detected::Upstream modified files in hw/xbox/mcpx/apu/:"
             echo "$APU_CHANGES"
-            # Comment the next line to halt the pipeline before merging when APU changes occur:
             exit 1
           else
             echo "No upstream modifications to APU subsystem detected."
@@ -118,14 +134,78 @@ jobs:
       - name: Update Submodules
         run: git submodule update --init --recursive
 
-      - name: Build Standalone AppImage (Docker)
+      - name: Add LLVM APT Repository
         run: |
-          docker run --rm \
-            -v ${{ github.workspace }}:/xemu \
-            -w /xemu \
-            -e CCACHE_DIR=/xemu/ccache \
-            ghcr.io/xemu-project/xemu-appimage-builder:latest \
-            ./build.sh -p appimage
+          sudo install -d /etc/apt/keyrings
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo gpg --dearmor -o /etc/apt/keyrings/llvm.gpg
+          sudo tee /etc/apt/sources.list.d/llvm.list <<EOF
+          deb [signed-by=/etc/apt/keyrings/llvm.gpg] http://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main
+          deb-src [signed-by=/etc/apt/keyrings/llvm.gpg] http://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main
+          EOF
+
+      - name: Install Build Dependencies & LLVM 21
+        shell: bash
+        env:
+          ARCH: amd64
+          POOL: https://apt.llvm.org/jammy/pool/main/l/llvm-toolchain-21/
+        run: |
+          set -euxo pipefail
+          sudo apt-get -qy update
+          sudo apt-get install -y ccache libfuse2 libusb-1.0-0-dev curl
+
+          # Derive current package revision from repository pool
+          HTML="$(curl -fsSL --compressed "$POOL")"
+          VER="$(grep -oE 'libllvm21_[0-9][^"]+_${{ env.ARCH }}\.deb' <<<"$HTML" | head -n1 \
+            | sed -E 's/^libllvm21_//; s/_${{ env.ARCH }}\.deb$//')"
+          echo "Using pool version: $VER"
+
+          mkdir -p /tmp/llvm21 && cd /tmp/llvm21
+          fetch() {
+            local pkg="$1"
+            local file="${pkg}_${VER}_${{ env.ARCH }}.deb"
+            curl -fsSLO "${POOL}${file}"
+          }
+
+          for pkg in \
+            clang-21 clang-tools-21 lld-21 \
+            libllvm21 libclang-cpp21 libclang-common-21-dev libclang1-21 libclang-rt-21-dev \
+            llvm-21 llvm-21-dev llvm-21-linker-tools llvm-21-runtime llvm-21-tools
+          do
+            fetch "$pkg"
+          done
+          sudo apt-get install -y --no-install-recommends ./*.deb
+
+          cd "${{ github.workspace }}"
+          sudo apt-get -qy build-dep .
+
+      - name: Create Debian Changelog
+        run: |
+          echo -e "xemu (1:0.0.0-0) unstable; urgency=medium\n\n  * Downstream Canary Build\n\n -- Downstream Canary <canary@xemu.local>  $(date -R)" > debian/changelog
+
+      - name: Compile Debian Package
+        run: |
+          sudo rm -f /usr/bin/dpkg-genbuildinfo
+          sudo ln -s /bin/true /usr/bin/dpkg-genbuildinfo
+          mkdir -p ${LTO_CACHE_DIR} ${CCACHE_DIR}
+          dpkg-buildpackage --no-sign -b
+          mkdir -p deb
+          mv ../*.deb ../*.ddeb deb/ 2>/dev/null || mv *.deb *.ddeb deb/ 2>/dev/null || true
+
+      - name: Generate AppImage
+        run: |
+          wget --no-verbose https://github.com/linuxdeploy/linuxdeploy/releases/latest/download/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+          ar x deb/xemu_*.deb || ar x deb/*.deb
+          mkdir -p appimage
+          tar -C appimage -xf data.tar*
+          METAFILE=$(find . -name "xemu.metainfo.xml" | head -n1)
+          if [ -n "$METAFILE" ]; then
+            install -DT "$METAFILE" appimage/usr/share/metainfo/xemu.metainfo.xml
+          fi
+          ./linuxdeploy-x86_64.AppImage --output appimage --appdir appimage
+          mkdir -p dist
+          mv xemu-*.AppImage dist/
 
       - name: Package AppImage Artifact
         uses: actions/upload-artifact@v4
