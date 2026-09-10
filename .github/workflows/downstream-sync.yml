@@ -69,3 +69,66 @@ jobs:
           name: xemu-win64-surround-alpha3-canary
           path: dist/xemu.exe
           retention-days: 14
+
+  canary-build-linux:
+    name: Sync Upstream & Compile Linux AppImage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Downstream Branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/ep-surround-harmonized
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Configure Git Identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch Upstream Master
+        run: |
+          git remote add upstream https://github.com/xemu-project/xemu.git
+          git fetch upstream master
+
+      - name: Inspect Upstream APU Drift
+        run: |
+          echo "Checking if upstream/master modified the APU subsystem..."
+          APU_CHANGES=$(git diff --name-only HEAD upstream/master -- hw/xbox/mcpx/apu/)
+          if [ -n "$APU_CHANGES" ]; then
+            echo "::warning title=APU Drift Detected::Upstream modified files in hw/xbox/mcpx/apu/:"
+            echo "$APU_CHANGES"
+            # Comment the next line to halt the pipeline before merging when APU changes occur:
+            exit 1
+          else
+            echo "No upstream modifications to APU subsystem detected."
+          fi
+
+      - name: Ephemeral Merge Upstream Master
+        run: |
+          echo "Attempting merge of upstream/master..."
+          git merge --no-commit --no-ff upstream/master || {
+            echo "::error::Merge conflict detected with upstream/master!"
+            git status --short
+            exit 1
+          }
+
+      - name: Update Submodules
+        run: git submodule update --init --recursive
+
+      - name: Build Standalone AppImage (Docker)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/xemu \
+            -w /xemu \
+            -e CCACHE_DIR=/xemu/ccache \
+            ghcr.io/xemu-project/xemu-appimage-builder:latest \
+            ./build.sh -p appimage
+
+      - name: Package AppImage Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xemu-linux-x86_64-surround-alpha3-appimage
+          path: dist/xemu*.AppImage
+          retention-days: 14
