@@ -213,3 +213,40 @@ jobs:
           name: xemu-linux-x86_64-surround-alpha3-appimage
           path: dist/xemu*.AppImage
           retention-days: 14
+          
+  publish-canary-release:
+    name: Publish Rolling Canary Release
+    runs-on: ubuntu-latest
+    needs: [canary-build-windows, canary-build-linux]
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Windows Binary
+        uses: actions/download-artifact@v4
+        with:
+          name: xemu-win64-surround-alpha3-canary
+          path: release-assets/
+
+      - name: Download Linux AppImage
+        uses: actions/download-artifact@v4
+        with:
+          name: xemu-linux-x86_64-surround-alpha3-appimage
+          path: release-assets/
+
+      - name: Update Rolling Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: canary
+          name: "Xemu Surround Edition (Canary Build)"
+          prerelease: true
+          make_latest: false
+          body: |
+            Automated downstream build of Xemu featuring native 5.1 discrete LPCM surround output.
+            
+            - Built automatically from branch: `feature/ep-surround-harmonized`
+            - Commit: ${{ github.sha }}
+            - Upstream synchronization: Verified clean APU merge-base
+          files: |
+            release-assets/xemu.exe
+            release-assets/xemu*.AppImage
