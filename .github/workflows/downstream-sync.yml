@@ -32,11 +32,11 @@ jobs:
       - name: Inspect Upstream APU Drift
         run: |
           echo "Checking if upstream/master modified the APU subsystem..."
-          APU_CHANGES=$(git diff --name-only HEAD upstream/master -- hw/xbox/mcpx/apu/)
+          # Three dots compares the common merge-base to upstream/master:
+          APU_CHANGES=$(git diff --name-only HEAD...upstream/master -- hw/xbox/mcpx/apu/)
           if [ -n "$APU_CHANGES" ]; then
             echo "::warning title=APU Drift Detected::Upstream modified files in hw/xbox/mcpx/apu/:"
             echo "$APU_CHANGES"
-            # Comment the next line to halt the pipeline before merging when APU changes occur:
             exit 1
           else
             echo "No upstream modifications to APU subsystem detected."
@@ -95,7 +95,8 @@ jobs:
       - name: Inspect Upstream APU Drift
         run: |
           echo "Checking if upstream/master modified the APU subsystem..."
-          APU_CHANGES=$(git diff --name-only HEAD upstream/master -- hw/xbox/mcpx/apu/)
+          # Three dots compares the common merge-base to upstream/master:
+          APU_CHANGES=$(git diff --name-only HEAD...upstream/master -- hw/xbox/mcpx/apu/)
           if [ -n "$APU_CHANGES" ]; then
             echo "::warning title=APU Drift Detected::Upstream modified files in hw/xbox/mcpx/apu/:"
             echo "$APU_CHANGES"
