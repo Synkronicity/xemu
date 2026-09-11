@@ -148,4 +148,8 @@ void dsp56k_write_memory(dsp_core_t* dsp, int space, uint32_t address, uint32_t 
 /* Interrupt relative functions */
 void dsp56k_add_interrupt(dsp_core_t* dsp, uint16_t inter);
 
+/* Stack functions conforming to DSP56300 PCU stack asymmetry */
+void dsp_stack_push_ssh(dsp_core_t* dsp, uint32_t value);
+uint32_t dsp_stack_pop_ssh(dsp_core_t* dsp);
+
 #endif	/* DSP_CPU_H */

@@ -50,6 +50,8 @@
 
 #define DSP_SP_SE   0x04
 #define DSP_SP_UF   0x05
+#define DSP_SP_MASK         0x0F
+#define DSP_SP_ERROR_MASK   ((1 << DSP_SP_SE) | (1 << DSP_SP_UF))
 
 /* Registers numbers in dsp.registers[] */
 #define DSP_REG_X0  0x04

@@ -63,6 +63,8 @@ static void dsp_write_reg(dsp_core_t* dsp, uint32_t numreg, uint32_t value);
 static void dsp_stack_push(dsp_core_t* dsp, uint32_t curpc, uint32_t cursr, uint16_t sshOnly);
 static void dsp_stack_pop(dsp_core_t* dsp, uint32_t *curpc, uint32_t *cursr);
 static void dsp_compute_ssh_ssl(dsp_core_t* dsp);
+void dsp_stack_push_ssh(dsp_core_t* dsp, uint32_t value);
+uint32_t dsp_stack_pop_ssh(dsp_core_t* dsp);
 
 /* 56bits arithmetic */
 static uint16_t dsp_abs56(uint32_t *dest);
@@ -123,7 +125,7 @@ static const int registers_mask[64] = {
     0, 0, 0, 0,
     0, 0, 0, 0,
     0, 16, 8, 6,
-    16, 16, 16, 16
+    24, 24, 24, 24
 };
 
 #include "dsp_emu.c.inc"
@@ -714,14 +716,14 @@ static void dsp_postexecute_update_pc(dsp_core_t* dsp)
         /* Did we execute the last instruction in loop ? */
         if (dsp->pc == dsp->registers[DSP_REG_LA] + 1) {
             --dsp->registers[DSP_REG_LC];
-            dsp->registers[DSP_REG_LC] &= BITMASK(16);
+            dsp->registers[DSP_REG_LC] &= BITMASK(24);
 
             if (dsp->registers[DSP_REG_LC] == 0) {
                 /* end of loop */
                 uint32_t saved_pc, saved_sr;
 
                 dsp_stack_pop(dsp, &saved_pc, &saved_sr);
-                dsp->registers[DSP_REG_SR] &= 0x7f;
+                dsp->registers[DSP_REG_SR] &= ~(1 << DSP_SR_LF);
                 dsp->registers[DSP_REG_SR] |= saved_sr & (1<<DSP_SR_LF);
                 dsp_stack_pop(dsp, &dsp->registers[DSP_REG_LA], &dsp->registers[DSP_REG_LC]);
             } else {
@@ -1040,15 +1042,12 @@ static void dsp_write_reg(dsp_core_t* dsp, uint32_t numreg, uint32_t value)
             dsp_compute_ssh_ssl(dsp);
             break;
         case DSP_REG_SSH:
-            dsp_stack_push(dsp, value, 0, 1);
+            dsp_stack_push_ssh(dsp, value);
             break;
         case DSP_REG_SSL:
             numreg = dsp->registers[DSP_REG_SP] & BITMASK(4);
-            if (numreg == 0) {
-                value = 0;
-            }
-            dsp->stack[1][numreg] = value & BITMASK(16);
-            dsp->registers[DSP_REG_SSL] = value & BITMASK(16);
+            dsp->stack[1][numreg] = value & BITMASK(24);
+            dsp->registers[DSP_REG_SSL] = value & BITMASK(24);
             break;
         default:
             dsp->registers[numreg] = value;
@@ -1061,6 +1060,18 @@ static void dsp_write_reg(dsp_core_t* dsp, uint32_t numreg, uint32_t value)
  *  Stack push/pop
  **********************************/
 
+void dsp_stack_push_ssh(dsp_core_t* dsp, uint32_t value)
+{
+    dsp_stack_push(dsp, value, 0, 1);
+}
+
+uint32_t dsp_stack_pop_ssh(dsp_core_t* dsp)
+{
+    uint32_t value = 0, dummy = 0;
+    dsp_stack_pop(dsp, &value, &dummy);
+    return value;
+}
+
 static void dsp_stack_push(dsp_core_t* dsp, uint32_t curpc, uint32_t cursr, uint16_t sshOnly)
 {
     uint32_t stack_error, underflow, stack;
@@ -1068,7 +1079,6 @@ static void dsp_stack_push(dsp_core_t* dsp, uint32_t curpc, uint32_t cursr, uint
     stack_error = dsp->registers[DSP_REG_SP] & (1<<DSP_SP_SE);
     underflow = dsp->registers[DSP_REG_SP] & (1<<DSP_SP_UF);
     stack = (dsp->registers[DSP_REG_SP] & BITMASK(4)) + 1;
-
 
     if ((stack_error==0) && (stack & (1<<DSP_SP_SE))) {
         /* Stack full, raise interrupt */
@@ -1081,46 +1091,47 @@ static void dsp_stack_push(dsp_core_t* dsp, uint32_t curpc, uint32_t cursr, uint
     dsp->registers[DSP_REG_SP] = (underflow | stack_error | stack) & BITMASK(6);
     stack &= BITMASK(4);
 
-    if (stack) {
-        /* SSH part */
-        dsp->stack[0][stack] = curpc & BITMASK(16);
-        /* SSL part, if instruction is not like "MOVEC xx, SSH"  */
-        if (sshOnly == 0) {
-            dsp->stack[1][stack] = cursr & BITMASK(16);
-        }
-    } else {
-        dsp->stack[0][0] = 0;
-        dsp->stack[1][0] = 0;
+    /* SSH part */
+    dsp->stack[0][stack] = curpc & BITMASK(24);
+    /* SSL part, if instruction is not like "MOVEC xx, SSH" */
+    if (sshOnly == 0) {
+        dsp->stack[1][stack] = cursr & BITMASK(24);
     }
 
     /* Update SSH and SSL registers */
-    dsp->registers[DSP_REG_SSH] = dsp->stack[0][stack];
-    dsp->registers[DSP_REG_SSL] = dsp->stack[1][stack];
+    dsp->registers[DSP_REG_SSH] = dsp->stack[0][stack] & BITMASK(24);
+    dsp->registers[DSP_REG_SSL] = dsp->stack[1][stack] & BITMASK(24);
 }
 
 static void dsp_stack_pop(dsp_core_t* dsp, uint32_t *newpc, uint32_t *newsr)
 {
-    uint32_t stack_error, underflow, stack;
+    uint32_t stack_error, underflow, cur_stack, new_stack;
+
+    cur_stack = dsp->registers[DSP_REG_SP] & BITMASK(4);
+    if (newpc) {
+        *newpc = dsp->stack[0][cur_stack] & BITMASK(24);
+    }
+    if (newsr) {
+        *newsr = dsp->stack[1][cur_stack] & BITMASK(24);
+    }
 
     stack_error = dsp->registers[DSP_REG_SP] & (1<<DSP_SP_SE);
     underflow = dsp->registers[DSP_REG_SP] & (1<<DSP_SP_UF);
-    stack = (dsp->registers[DSP_REG_SP] & BITMASK(4)) - 1;
+    new_stack = cur_stack - 1;
 
-    if ((stack_error==0) && (stack & (1<<DSP_SP_SE))) {
-        /* Stack empty*/
+    if ((stack_error==0) && (new_stack & (1<<DSP_SP_SE))) {
+        /* Stack empty / underflow */
         dsp56k_add_interrupt(dsp, DSP_INTER_STACK_ERROR);
         DPRINTF("Dsp: Stack underflow\n");
         if (dsp->exception_debugging)
             assert(!"Dsp stack underflow");
     }
 
-    dsp->registers[DSP_REG_SP] = (underflow | stack_error | stack) & BITMASK(6);
-    stack &= BITMASK(4);
-    *newpc = dsp->registers[DSP_REG_SSH];
-    *newsr = dsp->registers[DSP_REG_SSL];
+    dsp->registers[DSP_REG_SP] = (underflow | stack_error | new_stack) & BITMASK(6);
+    new_stack &= BITMASK(4);
 
-    dsp->registers[DSP_REG_SSH] = dsp->stack[0][stack];
-    dsp->registers[DSP_REG_SSL] = dsp->stack[1][stack];
+    dsp->registers[DSP_REG_SSH] = dsp->stack[0][new_stack] & BITMASK(24);
+    dsp->registers[DSP_REG_SSL] = dsp->stack[1][new_stack] & BITMASK(24);
 }
 
 static void dsp_compute_ssh_ssl(dsp_core_t* dsp)
@@ -1129,8 +1140,8 @@ static void dsp_compute_ssh_ssl(dsp_core_t* dsp)
 
     stack = dsp->registers[DSP_REG_SP];
     stack &= BITMASK(4);
-    dsp->registers[DSP_REG_SSH] = dsp->stack[0][stack];
-    dsp->registers[DSP_REG_SSL] = dsp->stack[1][stack];
+    dsp->registers[DSP_REG_SSH] = dsp->stack[0][stack] & BITMASK(24);
+    dsp->registers[DSP_REG_SSL] = dsp->stack[1][stack] & BITMASK(24);
 }
 
 
