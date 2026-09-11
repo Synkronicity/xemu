@@ -25,6 +25,27 @@
 
 static const int16_t ep_silence[256][2] = { 0 };
 
+static inline float clampf(float v, float min_val, float max_val)
+{
+    if (v < min_val) {
+        return min_val;
+    }
+    if (v > max_val) {
+        return max_val;
+    }
+    return v;
+}
+
+static inline int16_t float_to_s16(float v)
+{
+    if (v >= 1.0f) {
+        return 32767;
+    } else if (v <= -1.0f) {
+        return -32768;
+    }
+    return (int16_t)lrintf(v * 32767.0f);
+}
+
 void mcpx_apu_update_dsp_preference(MCPXAPUState *d)
 {
     static int last_known_dsp_pref = -1;
@@ -186,6 +207,10 @@ static void gp_fifo_rw(void *opaque, uint8_t *ptr, unsigned int index,
 
 static bool ep_sink_samples(MCPXAPUState *d, uint8_t *ptr, size_t len)
 {
+    if (!d->is_5_1_active) {
+        return false;
+    }
+
     if (d->monitor.point == MCPX_APU_DEBUG_MON_AC97) {
         return false;
     } else if ((d->monitor.point == MCPX_APU_DEBUG_MON_EP) ||
@@ -471,15 +496,17 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
             int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
             for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
                 uint32_t l = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + i);
-                d->monitor.frame_buf[off + i][0] = (int16_t)(l >> 8);
                 uint32_t r = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + 0x20 + i);
-                d->monitor.frame_buf[off + i][1] = (int16_t)(r >> 8);
+                float gp_left = int24_to_float(l);
+                float gp_right = int24_to_float(r);
+                d->monitor.frame_buf[off + i][0] = float_to_s16(clampf(gp_left, -1.0f, 1.0f));
+                d->monitor.frame_buf[off + i][1] = float_to_s16(clampf(gp_right, -1.0f, 1.0f));
             }
         }
     }
 
     /* Forward multichannel PCM blocks to EP aperture (X:0x4000) using 512-word (0x0200) strides per pair */
-    if (ep_enabled) {
+    if (d->is_5_1_active && ep_enabled) {
         int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
         for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
             int sample_idx = (off + i) * 2;
@@ -506,28 +533,31 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
         int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
 
         if (ep_enabled) {
-            /* Full 6-channel discrete surround from mixbins */
+            /* Full 6-channel discrete surround with additive GP 2D stereo bus mixing into FL/FR */
             for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
-                d->monitor.surround_buf[off + i][0] =
-                    (int16_t)(float_to_24b(mixbins[0][i]) >> 8);
-                d->monitor.surround_buf[off + i][1] =
-                    (int16_t)(float_to_24b(mixbins[1][i]) >> 8);
-                d->monitor.surround_buf[off + i][2] =
-                    (int16_t)(float_to_24b(mixbins[2][i]) >> 8);
-                d->monitor.surround_buf[off + i][3] =
-                    (int16_t)(float_to_24b(mixbins[3][i]) >> 8);
-                d->monitor.surround_buf[off + i][4] =
-                    (int16_t)(float_to_24b(mixbins[4][i]) >> 8);
-                d->monitor.surround_buf[off + i][5] =
-                    (int16_t)(float_to_24b(mixbins[5][i]) >> 8);
+                uint32_t l = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + i);
+                uint32_t r = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + 0x20 + i);
+                float gp_left = int24_to_float(l);
+                float gp_right = int24_to_float(r);
+                float fl = mixbins[0][i] + gp_left;
+                float fr = mixbins[1][i] + gp_right;
+
+                d->monitor.surround_buf[off + i][0] = float_to_s16(clampf(fl, -1.0f, 1.0f));
+                d->monitor.surround_buf[off + i][1] = float_to_s16(clampf(fr, -1.0f, 1.0f));
+                d->monitor.surround_buf[off + i][2] = float_to_s16(clampf(mixbins[2][i], -1.0f, 1.0f));
+                d->monitor.surround_buf[off + i][3] = float_to_s16(clampf(mixbins[3][i], -1.0f, 1.0f));
+                d->monitor.surround_buf[off + i][4] = float_to_s16(clampf(mixbins[4][i], -1.0f, 1.0f));
+                d->monitor.surround_buf[off + i][5] = float_to_s16(clampf(mixbins[5][i], -1.0f, 1.0f));
             }
         } else {
             /* Bootloader intro (!ep_enabled): mirror GP mixbuffer to FL/FR and zero surround channels */
             for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
                 uint32_t l = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + i);
                 uint32_t r = dsp_read_memory(d->gp.dsp, 'X', 0x1400 + 0x20 + i);
-                d->monitor.surround_buf[off + i][0] = (int16_t)(l >> 8);
-                d->monitor.surround_buf[off + i][1] = (int16_t)(r >> 8);
+                float gp_left = int24_to_float(l);
+                float gp_right = int24_to_float(r);
+                d->monitor.surround_buf[off + i][0] = float_to_s16(clampf(gp_left, -1.0f, 1.0f));
+                d->monitor.surround_buf[off + i][1] = float_to_s16(clampf(gp_right, -1.0f, 1.0f));
                 d->monitor.surround_buf[off + i][2] = 0;
                 d->monitor.surround_buf[off + i][3] = 0;
                 d->monitor.surround_buf[off + i][4] = 0;
@@ -537,7 +567,8 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
     }
 
     /* Run EP */
-    if ((d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
+    if (d->is_5_1_active &&
+        (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
         (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPDSPRST)) {
         if (d->ep_frame_div % 8 == 0) {
             uint32_t reset_vec =

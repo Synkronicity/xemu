@@ -182,6 +182,9 @@ static void throttle(MCPXAPUState *d)
         d->monitor.queued_bytes_low = frame_bytes;
         d->monitor.queued_bytes_high = 3 * frame_bytes;
     }
+    if (d->monitor.queued_bytes_high <= d->monitor.queued_bytes_low) {
+        d->monitor.queued_bytes_high = 3 * d->monitor.queued_bytes_low;
+    }
 
     if (d->monitor.stream) {
         queued_bytes = SDL_GetAudioStreamQueued(d->monitor.stream);
