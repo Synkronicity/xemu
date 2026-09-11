@@ -295,37 +295,59 @@ static void ep_fifo_rw(void *opaque, uint8_t *ptr, unsigned int index,
 
 static void ep_drain_output_fifo0(MCPXAPUState *d)
 {
+    const uint32_t drain_len = NUM_SAMPLES_PER_FRAME * 4; /* 32 stereo samples * 4 bytes/sample = 128 bytes */
+
+    /* Drain Output FIFO 0 */
     uint32_t base = GET_MASK(d->regs[NV_PAPU_EPOFBASE0] | d->ep.regs[NV_PAPU_EPOFBASE0],
                              NV_PAPU_GPOFBASE0_VALUE);
     uint32_t end = GET_MASK(d->regs[NV_PAPU_EPOFEND0] | d->ep.regs[NV_PAPU_EPOFEND0],
                             NV_PAPU_GPOFEND0_VALUE);
-    if (end <= base) {
-        return;
+    if (end > base) {
+        uint32_t cur = GET_MASK(d->regs[NV_PAPU_EPOFCUR0] | d->ep.regs[NV_PAPU_EPOFCUR0],
+                                NV_PAPU_GPOFCUR0_VALUE);
+        if (cur >= end) {
+            cur = base + ((cur - base) % (end - base));
+        }
+        if (cur < base) {
+            cur = base;
+        }
+
+        hwaddr sge_base = d->regs[NV_PAPU_EPFADDR] | d->ep.regs[NV_PAPU_EPFADDR];
+        unsigned int max_sge = d->regs[NV_PAPU_EPFMAXSGE] | d->ep.regs[NV_PAPU_EPFMAXSGE];
+
+        uint8_t temp_buf[128];
+
+        cur = circular_scatter_gather_rw(d,
+            sge_base, max_sge,
+            temp_buf, base, end, cur, drain_len, false);
+
+        SET_MASK(d->regs[NV_PAPU_EPOFCUR0], NV_PAPU_GPOFCUR0_VALUE, cur);
+        SET_MASK(d->ep.regs[NV_PAPU_EPOFCUR0], NV_PAPU_GPOFCUR0_VALUE, cur);
     }
 
-    uint32_t cur = GET_MASK(d->regs[NV_PAPU_EPOFCUR0] | d->ep.regs[NV_PAPU_EPOFCUR0],
-                            NV_PAPU_GPOFCUR0_VALUE);
-    if (cur >= end) {
-        cur = base + ((cur - base) % (end - base));
+    /* Advance Input FIFO 0 if active so guest driver sees input samples consumed */
+    uint32_t in_base = GET_MASK(d->regs[NV_PAPU_EPIFBASE0] | d->ep.regs[NV_PAPU_EPIFBASE0],
+                                NV_PAPU_GPOFBASE0_VALUE);
+    uint32_t in_end = GET_MASK(d->regs[NV_PAPU_EPIFEND0] | d->ep.regs[NV_PAPU_EPIFEND0],
+                              NV_PAPU_GPOFEND0_VALUE);
+    if (in_end > in_base) {
+        uint32_t in_cur = GET_MASK(d->regs[NV_PAPU_EPIFCUR0] | d->ep.regs[NV_PAPU_EPIFCUR0],
+                                   NV_PAPU_GPOFCUR0_VALUE);
+        if (in_cur >= in_end) {
+            in_cur = in_base + ((in_cur - in_base) % (in_end - in_base));
+        }
+        if (in_cur < in_base) {
+            in_cur = in_base;
+        }
+
+        in_cur += drain_len;
+        if (in_cur >= in_end) {
+            in_cur = in_base + ((in_cur - in_base) % (in_end - in_base));
+        }
+
+        SET_MASK(d->regs[NV_PAPU_EPIFCUR0], NV_PAPU_GPOFCUR0_VALUE, in_cur);
+        SET_MASK(d->ep.regs[NV_PAPU_EPIFCUR0], NV_PAPU_GPOFCUR0_VALUE, in_cur);
     }
-    if (cur < base) {
-        cur = base;
-    }
-
-    hwaddr sge_base = d->regs[NV_PAPU_EPFADDR] | d->ep.regs[NV_PAPU_EPFADDR];
-    unsigned int max_sge = d->regs[NV_PAPU_EPFMAXSGE] | d->ep.regs[NV_PAPU_EPFMAXSGE];
-
-    uint8_t temp_buf[sizeof(d->monitor.frame_buf)];
-    size_t len = sizeof(d->monitor.frame_buf);
-
-    cur = circular_scatter_gather_rw(d,
-        sge_base, max_sge,
-        temp_buf, base, end, cur, len, false);
-
-    SET_MASK(d->regs[NV_PAPU_EPOFCUR0], NV_PAPU_GPOFCUR0_VALUE, cur);
-    SET_MASK(d->ep.regs[NV_PAPU_EPOFCUR0], NV_PAPU_GPOFCUR0_VALUE, cur);
-
-    ep_sink_samples(d, temp_buf, len);
 }
 
 static void proc_rst_write(DSPState *dsp, uint32_t oldval, uint32_t val)
