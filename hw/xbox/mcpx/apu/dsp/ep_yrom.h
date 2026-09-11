@@ -55,7 +55,6 @@
 
 /* Index 0 is Y:$0800. */
 // clang-format off
-static const uint32_t ep_yrom[0x800] = {
 static const uint32_t ep_yrom[2048] = {
     0x80b652, 0x7e94d5, 0x081251, 0xf7ee67, /* $0800 */
     0x081251, 0x805361, 0x7f6007, 0x1c8662, /* $0804 */
