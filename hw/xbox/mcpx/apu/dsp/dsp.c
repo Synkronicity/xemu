@@ -51,11 +51,34 @@ uint32_t read_peripheral(DSPState *dsp, uint32_t address)
     case 0xFFFFB3:
         v = 0; // core->num_inst; // ??
         break;
-    case 0xFFFFC5:
-        v = dsp->interrupts;
-        if (dsp->dma.eol) {
-            v |= INTERRUPT_DMA_EOL;
+    case DSP_REG_PERIPH_HCR: /* 0xFFFFC2 */
+        v = dsp->hcr;
+        break;
+    case DSP_REG_PERIPH_HSR: /* 0xFFFFC3 */
+        v = dsp->hsr;
+        break;
+    case DSP_REG_PERIPH_HPCR: /* 0xFFFFC4 */
+        v = dsp->hpcr;
+        break;
+    case DSP_REG_PERIPH_HBAR: /* 0xFFFFC5 */
+        v = dsp->hbar;
+        if (dsp->is_gp) {
+            v |= dsp->interrupts;
+            if (dsp->dma.eol) {
+                v |= INTERRUPT_DMA_EOL;
+            }
         }
+        break;
+    case DSP_REG_PERIPH_HORX: /* 0xFFFFC6 */
+        v = dsp->horx;
+        dsp->hsr &= ~DSP_HSR_HRDF;
+        break;
+    case DSP_REG_PERIPH_HOTX: /* 0xFFFFC7 */
+        v = dsp->hotx;
+        break;
+    case DSP_REG_PERIPH_HDDR: /* 0xFFFFC8 */
+    case DSP_REG_PERIPH_HDR:  /* 0xFFFFC9 */
+        v = 0;
         break;
     case 0xFFFFD4:
         v = dsp_dma_read(&dsp->dma, DMA_NEXT_BLOCK);
@@ -78,16 +101,32 @@ uint32_t read_peripheral(DSPState *dsp, uint32_t address)
 void write_peripheral(DSPState *dsp, uint32_t address, uint32_t value)
 {
     switch (address) {
-    case 0xFFFFC4:
-        if (value & 1) {
+    case DSP_REG_PERIPH_HCR: /* 0xFFFFC2 */
+        dsp->hcr = value & 0x00FFFFFF;
+        break;
+    case DSP_REG_PERIPH_HPCR: /* 0xFFFFC4 */
+        dsp->hpcr = value;
+        if (dsp->is_gp && (value & 1)) {
             dsp_set_halt_requested(dsp, true);
         }
         break;
-    case 0xFFFFC5:
-        dsp->interrupts &= ~value;
-        if (value & INTERRUPT_DMA_EOL) {
-            dsp->dma.eol = false;
+    case DSP_REG_PERIPH_HBAR: /* 0xFFFFC5 */
+        dsp->hbar = value;
+        if (dsp->is_gp) {
+            dsp->interrupts &= ~value;
+            if (value & INTERRUPT_DMA_EOL) {
+                dsp->dma.eol = false;
+            }
         }
+        break;
+    case DSP_REG_PERIPH_HOTX: /* 0xFFFFC7 */
+        dsp->hotx = value & 0x00FFFFFF;
+        dsp->hsr &= ~DSP_HSR_HTDE;
+        /* Host side automatically receives data, re-enabling transmit buffer empty */
+        dsp->hsr |= DSP_HSR_HTDE;
+        break;
+    case DSP_REG_PERIPH_HDDR: /* 0xFFFFC8 */
+    case DSP_REG_PERIPH_HDR:  /* 0xFFFFC9 */
         break;
     case 0xFFFFD4:
         dsp_dma_write(&dsp->dma, DMA_NEXT_BLOCK, value);
@@ -109,6 +148,25 @@ void write_peripheral(DSPState *dsp, uint32_t address, uint32_t value)
 void dsp_start_frame_impl(DSPState *dsp)
 {
     dsp->interrupts |= INTERRUPT_START_FRAME;
+    dsp->hsr |= DSP_HSR_HRDF;
+    if (dsp->hcr & DSP_HCR_HRIE) {
+        dsp->interrupts |= (1 << 2);
+    }
+    if (dsp->hcr & DSP_HCR_HCIE) {
+        dsp->interrupts |= (1 << 3);
+    }
+}
+
+void dsp_host_write_horx(DSPState *dsp, uint32_t value)
+{
+    dsp->horx = value & 0x00FFFFFF;
+    dsp->hsr |= DSP_HSR_HRDF;
+}
+
+uint32_t dsp_host_read_hotx(DSPState *dsp)
+{
+    dsp->hsr |= DSP_HSR_HTDE;
+    return dsp->hotx;
 }
 
 DSPState *dsp_init(void *rw_opaque, dsp_scratch_rw_func scratch_rw,
@@ -141,6 +199,13 @@ void dsp_destroy(DSPState *dsp)
 
 void dsp_reset(DSPState *dsp)
 {
+    dsp->hcr = 0;
+    dsp->hsr = DSP_HSR_HTDE;
+    dsp->hpcr = 0;
+    dsp->hbar = 0x80;
+    dsp->horx = 0;
+    dsp->hotx = 0;
+    dsp->interrupts = 0;
     dsp->ops->reset(dsp);
 }
 

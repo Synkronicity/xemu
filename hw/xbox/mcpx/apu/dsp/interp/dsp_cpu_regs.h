@@ -120,6 +120,31 @@
 #define DSP_PERIPH_BASE 0xFFFF80
 #define DSP_PERIPH_SIZE 128
 
+/* Motorola DSP56362 HDI08 Host Interface peripheral registers ($FFFFC0-$FFFFC9) */
+#define DSP_REG_PERIPH_HCR   0xFFFFC2
+#define DSP_REG_PERIPH_HSR   0xFFFFC3
+#define DSP_REG_PERIPH_HPCR  0xFFFFC4
+#define DSP_REG_PERIPH_HBAR  0xFFFFC5
+#define DSP_REG_PERIPH_HORX  0xFFFFC6
+#define DSP_REG_PERIPH_HOTX  0xFFFFC7
+#define DSP_REG_PERIPH_HDDR  0xFFFFC8
+#define DSP_REG_PERIPH_HDR   0xFFFFC9
+
+/* HSR (Host Status Register at $FFFFC3) bitfields */
+#define DSP_HSR_HRDF         (1 << 0)
+#define DSP_HSR_HTDE         (1 << 1)
+#define DSP_HSR_HCP          (1 << 2)
+#define DSP_HSR_HF0          (1 << 3)
+#define DSP_HSR_HF1          (1 << 4)
+#define DSP_HSR_DMA          (1 << 7)
+
+/* HCR (Host Control Register at $FFFFC2) bitfields */
+#define DSP_HCR_HRIE         (1 << 0)
+#define DSP_HCR_HTIE         (1 << 1)
+#define DSP_HCR_HCIE         (1 << 2)
+#define DSP_HCR_HF2          (1 << 3)
+#define DSP_HCR_HF3          (1 << 4)
+
 #define DSP_INTERRUPT_NONE      0x0
 #define DSP_INTERRUPT_DISABLED  0x1
 #define DSP_INTERRUPT_LONG      0x2

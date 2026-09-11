@@ -103,6 +103,14 @@ struct DSPState {
 
     uint32_t interrupts;
 
+    /* Motorola DSP56362 HDI08 Host Interface registers */
+    uint32_t hcr;
+    uint32_t hsr;
+    uint32_t hpcr;
+    uint32_t hbar;
+    uint32_t horx;
+    uint32_t hotx;
+
     bool is_gp;
 
     void *backend;
@@ -123,6 +131,10 @@ void dsp_start_frame(DSPState *dsp);
 uint32_t dsp_read_memory(DSPState *dsp, char space, uint32_t addr);
 void dsp_write_memory(DSPState *dsp, char space, uint32_t address,
                       uint32_t value);
+
+/* HDI08 Host Interface accessors */
+void dsp_host_write_horx(DSPState *dsp, uint32_t value);
+uint32_t dsp_host_read_hotx(DSPState *dsp);
 
 /* Accessor functions for backend-independent state access */
 bool dsp_get_halt_requested(DSPState *dsp);

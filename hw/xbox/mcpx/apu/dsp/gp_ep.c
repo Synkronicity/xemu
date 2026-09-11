@@ -551,6 +551,7 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
                 }
 
                 dsp_start_frame(d->ep.dsp);
+                d->ep.dsp->hsr |= DSP_HSR_HRDF;
                 dsp_set_halt_requested(d->ep.dsp, false);
                 dsp_set_cycle_count(d->ep.dsp, 0);
                 do {
