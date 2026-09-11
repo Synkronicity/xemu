@@ -797,6 +797,14 @@ static void dis_do_aa(dsp_core_t* dsp)
         read_memory_p(dsp, dsp->pc+1)
     );
 }
+static void dis_do_forever(dsp_core_t* dsp)
+{
+    dsp->disasm_cur_inst_len++;
+
+    sprintf(dsp->disasm_str_instr, "do forever,p:$%06x",
+        read_memory_p(dsp, dsp->pc + 1) & BITMASK(24)
+    );
+}
 
 static void dis_do_imm(dsp_core_t* dsp)
 {

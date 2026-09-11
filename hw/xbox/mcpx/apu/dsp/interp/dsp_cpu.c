@@ -124,7 +124,7 @@ static const int registers_mask[64] = {
 
     0, 0, 0, 0,
     0, 0, 0, 0,
-    0, 16, 8, 6,
+    0, 24, 8, 6,
     24, 24, 24, 24
 };
 
@@ -227,7 +227,7 @@ static const OpcodeEntry nonparallel_opcodes[] = {
     { "0000011000aaaaaa0S000000", "do [X or Y]:aa, expr", dis_do_aa, emu_do_aa },
     { "00000110iiiiiiii1000hhhh", "do #xxx, expr", dis_do_imm, emu_do_imm },
     { "0000011011DDDDDD00000000", "do S, expr", dis_do_reg, emu_do_reg },
-    { "000000000000001000000011", "do_f", NULL, NULL },
+    { "000000000000000100000000", "do forever, expr", dis_do_forever, emu_do_forever },
     { "0000011001MMMRRR0S010000", "dor [X or Y]:ea, label", NULL, NULL, match_MMMRRR },
     { "0000011000aaaaaa0S010000", "dor [X or Y]:aa, label", NULL, NULL },
     { "00000110iiiiiiii1001hhhh", "dor #xxx, label", dis_dor_imm, emu_dor_imm },
@@ -715,20 +715,29 @@ static void dsp_postexecute_update_pc(dsp_core_t* dsp)
 
         /* Did we execute the last instruction in loop ? */
         if (dsp->pc == dsp->registers[DSP_REG_LA] + 1) {
-            --dsp->registers[DSP_REG_LC];
-            dsp->registers[DSP_REG_LC] &= BITMASK(24);
-
-            if (dsp->registers[DSP_REG_LC] == 0) {
-                /* end of loop */
-                uint32_t saved_pc, saved_sr;
-
-                dsp_stack_pop(dsp, &saved_pc, &saved_sr);
-                dsp->registers[DSP_REG_SR] &= ~(1 << DSP_SR_LF);
-                dsp->registers[DSP_REG_SR] |= saved_sr & (1<<DSP_SR_LF);
-                dsp_stack_pop(dsp, &dsp->registers[DSP_REG_LA], &dsp->registers[DSP_REG_LC]);
+            /* Check if this is a DO FOREVER loop */
+            if (dsp->registers[DSP_REG_SR] & (1 << DSP_SR_FV)) {
+                /* Infinite loop: do not decrement LC. Jump back to loop start address in SSH */
+                dsp->pc = dsp->stack[0][dsp->registers[DSP_REG_SP] & DSP_SP_MASK];
             } else {
-                /* Loop one more time */
-                dsp->pc = dsp->registers[DSP_REG_SSH];
+                /* Standard DO loop: decrement LC */
+                dsp->registers[DSP_REG_LC] = (dsp->registers[DSP_REG_LC] - 1) & BITMASK(24);
+                if (dsp->registers[DSP_REG_LC] == 0) {
+                    /* Loop finished: pop Level 2 (PC, SR) */
+                    uint32_t saved_pc, saved_sr;
+
+                    dsp_stack_pop(dsp, &saved_pc, &saved_sr);
+
+                    /* Restore status flags */
+                    dsp->registers[DSP_REG_SR] &= ~((1 << DSP_SR_LF) | (1 << DSP_SR_FV));
+                    dsp->registers[DSP_REG_SR] |= saved_sr & ((1 << DSP_SR_LF) | (1 << DSP_SR_FV));
+
+                    /* Pop Level 1 (LA, LC) */
+                    dsp_stack_pop(dsp, &dsp->registers[DSP_REG_LA], &dsp->registers[DSP_REG_LC]);
+                } else {
+                    /* Repeat loop */
+                    dsp->pc = dsp->stack[0][dsp->registers[DSP_REG_SP] & DSP_SP_MASK];
+                }
             }
         }
     }
@@ -779,7 +788,7 @@ static void dsp_postexecute_interrupts(dsp_core_t* dsp)
                 if ( ((instr & 0xfff000) == 0x0d0000) || ((instr & 0xffc0ff) == 0x0bc080) ) {
                     dsp->interrupt_state = DSP_INTERRUPT_LONG;
                     dsp_stack_push(dsp, dsp->interrupt_save_pc, dsp->registers[DSP_REG_SR], 0);
-                    dsp->registers[DSP_REG_SR] &= BITMASK(16)-((1<<DSP_SR_LF)|(1<<DSP_SR_FV)  |
+                    dsp->registers[DSP_REG_SR] &= ~((1<<DSP_SR_LF)|(1<<DSP_SR_FV)  |
                                             (1<<DSP_SR_S1)|(1<<DSP_SR_S0) |
                                             (1<<DSP_SR_I0)|(1<<DSP_SR_I1));
                     dsp->registers[DSP_REG_SR] |= dsp->interrupt_ipl_to_raise<<DSP_SR_I0;
@@ -793,7 +802,7 @@ static void dsp_postexecute_interrupts(dsp_core_t* dsp)
                     if ( ((instr & 0xfff000) == 0x0d0000) || ((instr & 0xffc0ff) == 0x0bc080) ) {
                         dsp->interrupt_state = DSP_INTERRUPT_LONG;
                         dsp_stack_push(dsp, dsp->interrupt_save_pc, dsp->registers[DSP_REG_SR], 0);
-                        dsp->registers[DSP_REG_SR] &= BITMASK(16)-((1<<DSP_SR_LF)|(1<<DSP_SR_FV)  |
+                        dsp->registers[DSP_REG_SR] &= ~((1<<DSP_SR_LF)|(1<<DSP_SR_FV)  |
                                                 (1<<DSP_SR_S1)|(1<<DSP_SR_S0) |
                                                 (1<<DSP_SR_I0)|(1<<DSP_SR_I1));
                         dsp->registers[DSP_REG_SR] |= dsp->interrupt_ipl_to_raise<<DSP_SR_I0;
@@ -1024,7 +1033,7 @@ static void dsp_write_reg(dsp_core_t* dsp, uint32_t numreg, uint32_t value)
             dsp->registers[DSP_REG_OMR] = value & 0xc7;
             break;
         case DSP_REG_SR:
-            dsp->registers[DSP_REG_SR] = value & 0xaf7f;
+            dsp->registers[DSP_REG_SR] = value & (0xaf7f | (1 << DSP_SR_FV));
             break;
         case DSP_REG_SP:
             stack_error = dsp->registers[DSP_REG_SP] & (3<<DSP_SP_SE);

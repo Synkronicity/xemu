@@ -6831,13 +6831,24 @@ static void emu_dor_reg(dsp_core_t* dsp)
     dsp->instr_cycle += 4;
 }
 
+static void emu_do_forever(dsp_core_t* dsp)
+{
+    dsp_stack_push(dsp, dsp->registers[DSP_REG_LA], dsp->registers[DSP_REG_LC], 0);
+    dsp->registers[DSP_REG_LA] = read_memory_p(dsp, dsp->pc+1) & BITMASK(24);
+    dsp->cur_inst_len++;
+    dsp_stack_push(dsp, dsp->pc+dsp->cur_inst_len, dsp->registers[DSP_REG_SR], 0);
+    dsp->registers[DSP_REG_SR] |= (1<<DSP_SR_LF) | (1<<DSP_SR_FV);
+
+    dsp->instr_cycle += 4;
+}
+
 static void emu_enddo(dsp_core_t* dsp)
 {
     uint32_t saved_pc, saved_sr;
 
     dsp_stack_pop(dsp, &saved_pc, &saved_sr);
-    dsp->registers[DSP_REG_SR] &= ~(1 << DSP_SR_LF);
-    dsp->registers[DSP_REG_SR] |= saved_sr & (1<<DSP_SR_LF);
+    dsp->registers[DSP_REG_SR] &= ~((1 << DSP_SR_LF) | (1 << DSP_SR_FV));
+    dsp->registers[DSP_REG_SR] |= saved_sr & ((1 << DSP_SR_LF) | (1 << DSP_SR_FV));
     dsp_stack_pop(dsp, &dsp->registers[DSP_REG_LA], &dsp->registers[DSP_REG_LC]);
 }
 
