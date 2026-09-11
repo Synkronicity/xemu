@@ -135,6 +135,14 @@ static uint32_t circular_scatter_gather_rw(MCPXAPUState *d, hwaddr sge_base,
                                            uint32_t base, uint32_t end,
                                            uint32_t cur, size_t len, bool dir)
 {
+    if (sge_base == 0) {
+        cur += len;
+        if (cur >= end) {
+            cur = base + ((cur - base) % (end - base));
+        }
+        return cur;
+    }
+
     while (len > 0) {
         unsigned int bytes_to_copy = end - cur;
 
@@ -207,16 +215,14 @@ static void gp_fifo_rw(void *opaque, uint8_t *ptr, unsigned int index,
 
 static bool ep_sink_samples(MCPXAPUState *d, uint8_t *ptr, size_t len)
 {
-    if (!d->is_5_1_active) {
-        return false;
-    }
-
     if (d->monitor.point == MCPX_APU_DEBUG_MON_AC97) {
         return false;
     } else if ((d->monitor.point == MCPX_APU_DEBUG_MON_EP) ||
         (d->monitor.point == MCPX_APU_DEBUG_MON_GP_OR_EP)) {
-        assert(len == sizeof(d->monitor.frame_buf));
-        memcpy(d->monitor.frame_buf, ptr, len);
+        assert(len <= sizeof(d->monitor.frame_buf));
+        if (d->is_5_1_active) {
+            memcpy(d->monitor.frame_buf, ptr, len);
+        }
     }
 
     return true;
@@ -243,6 +249,10 @@ static void ep_fifo_rw(void *opaque, uint8_t *ptr, unsigned int index,
         end = GET_MASK(d->regs[NV_PAPU_EPIFEND0 + 0x10 * index],
                        NV_PAPU_GPOFEND0_VALUE);
         cur_reg = NV_PAPU_EPIFCUR0 + 0x10 * index;
+    }
+
+    if (end <= base) {
+        return;
     }
 
     uint32_t cur = GET_MASK(d->regs[cur_reg], NV_PAPU_GPOFCUR0_VALUE);
@@ -273,6 +283,33 @@ static void ep_fifo_rw(void *opaque, uint8_t *ptr, unsigned int index,
         ptr, base, end, cur, len, dir);
 
     SET_MASK(d->regs[cur_reg], NV_PAPU_GPOFCUR0_VALUE, cur);
+    SET_MASK(d->ep.regs[cur_reg], NV_PAPU_GPOFCUR0_VALUE, cur);
+}
+
+static void ep_drain_fifos(MCPXAPUState *d)
+{
+    size_t subframe_bytes = NUM_SAMPLES_PER_FRAME * 4;
+    uint8_t dummy_buf[128] = { 0 };
+
+    for (unsigned int i = 0; i < EP_OUTPUT_FIFO_COUNT; i++) {
+        uint32_t base = GET_MASK(d->regs[NV_PAPU_EPOFBASE0 + 0x10 * i],
+                                 NV_PAPU_GPOFBASE0_VALUE);
+        uint32_t end = GET_MASK(d->regs[NV_PAPU_EPOFEND0 + 0x10 * i],
+                                NV_PAPU_GPOFEND0_VALUE);
+        if (end > base) {
+            ep_fifo_rw(d, dummy_buf, i, subframe_bytes, true);
+        }
+    }
+
+    for (unsigned int i = 0; i < EP_INPUT_FIFO_COUNT; i++) {
+        uint32_t base = GET_MASK(d->regs[NV_PAPU_EPIFBASE0 + 0x10 * i],
+                                 NV_PAPU_GPOFBASE0_VALUE);
+        uint32_t end = GET_MASK(d->regs[NV_PAPU_EPIFEND0 + 0x10 * i],
+                                NV_PAPU_GPOFEND0_VALUE);
+        if (end > base) {
+            ep_fifo_rw(d, dummy_buf, i, subframe_bytes, false);
+        }
+    }
 }
 
 static void proc_rst_write(DSPState *dsp, uint32_t oldval, uint32_t val)
@@ -592,36 +629,49 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
     }
 
     /* Run EP */
-    if (d->is_5_1_active &&
-        (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
-        (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPDSPRST)) {
-        if (d->ep_frame_div % 8 == 0) {
-            uint32_t reset_vec =
-                dsp_read_memory(d->ep.dsp, 'P', 0x0000) & 0x00ffffff;
-
-            if (reset_vec != 0 && reset_vec != 0x00cacaca) {
-                static bool detected = false;
-                if (!detected) {
-                    fprintf(stderr,
-                            "[EP LITMUS] Guest DMA Detected! Reset vector P:0x0000 = 0x%06X (PC: 0x%06X)\n",
-                            reset_vec, dsp_get_pc(d->ep.dsp));
-                    detected = true;
-                }
-
-                dsp_start_frame(d->ep.dsp);
-                d->ep.dsp->hsr |= DSP_HSR_HRDF;
-                int cycle_budget = EP_SUBFRAME_CYCLES;
-                dsp_set_cycle_count(d->ep.dsp, 0);
-                dsp_set_halt_requested(d->ep.dsp, false);
-
-                while (cycle_budget > 0 && !dsp_get_halt_requested(d->ep.dsp)) {
-                    int step_chunk = (cycle_budget > 1000) ? 1000 : cycle_budget;
-                    dsp_run(d->ep.dsp, step_chunk);
-                    cycle_budget -= step_chunk;
-                }
-                g_dbg.ep.cycles = dsp_get_cycle_count(d->ep.dsp);
-            }
+    bool ep_active = d->is_5_1_active &&
+                     (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
+                     (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPDSPRST);
+    if (ep_active) {
+        uint32_t reset_vec =
+            dsp_read_memory(d->ep.dsp, 'P', 0x0000) & 0x00ffffff;
+        if (reset_vec == 0 || reset_vec == 0x00cacaca) {
+            ep_active = false;
         }
+    }
+
+    if (ep_active) {
+        if (d->ep_frame_div % 8 == 0) {
+            static bool detected = false;
+            if (!detected) {
+                fprintf(stderr,
+                        "[EP LITMUS] Guest DMA Detected! Reset vector P:0x0000 = 0x%06X (PC: 0x%06X)\n",
+                        dsp_read_memory(d->ep.dsp, 'P', 0x0000) & 0x00ffffff,
+                        dsp_get_pc(d->ep.dsp));
+                detected = true;
+            }
+
+            dsp_start_frame(d->ep.dsp);
+            d->ep.dsp->hsr |= DSP_HSR_HRDF;
+            int cycle_budget = EP_SUBFRAME_CYCLES;
+            dsp_set_cycle_count(d->ep.dsp, 0);
+            dsp_set_halt_requested(d->ep.dsp, false);
+
+            while (cycle_budget > 0 && !dsp_get_halt_requested(d->ep.dsp)) {
+                int step_chunk = (cycle_budget > 1000) ? 1000 : cycle_budget;
+                dsp_run(d->ep.dsp, step_chunk);
+                cycle_budget -= step_chunk;
+            }
+            g_dbg.ep.cycles = dsp_get_cycle_count(d->ep.dsp);
+        }
+    } else {
+        /*
+         * When dolby_ep.bin is absent or EP DSP stepping is bypassed (e.g. in
+         * stereo fallback or unbooted state), unconditionally drain and advance
+         * the EP FIFO pointers every subframe tick so that guest dsound.sys
+         * never stalls waiting on full/unserviced FIFOs.
+         */
+        ep_drain_fifos(d);
     }
 }
 
