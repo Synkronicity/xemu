@@ -253,7 +253,6 @@ struct config {
       int num_workers;
     } vp;
     bool use_dsp;
-    bool use_dsp_jit;
     bool hrtf;
     float volume_limit;
   } audio;
@@ -717,9 +716,6 @@ CNode config_tree =
     offsetof(struct config, audio.use_dsp),
     "use_dsp", false),
    cbool(
-    offsetof(struct config, audio.use_dsp_jit),
-    "use_dsp_jit", false),
-   cbool(
     offsetof(struct config, audio.hrtf),
     "hrtf", true),
    cnumber(
@@ -788,7 +784,6 @@ CNode config_tree =
      "hdd_path", ""),
     cstring(
      offsetof(struct config, sys.files.dvd_path),
-     "dvd_path", "")
      "dvd_path", ""),
     cstring(
      offsetof(struct config, sys.files.ep_rom_path),
