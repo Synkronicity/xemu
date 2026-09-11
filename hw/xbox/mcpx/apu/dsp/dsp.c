@@ -225,20 +225,33 @@ bool dsp_bootstrap_ep_firmware(DSPState *dsp)
         return false;
     }
 
-    const char *candidates[] = {
-        "./dolby_ep.bin",
-        "./tools/dolby_ep.bin",
-        "../tools/dolby_ep.bin",
-        NULL
-    };
-
     FILE *f = NULL;
     const char *found_path = NULL;
-    for (int i = 0; candidates[i] != NULL; i++) {
-        f = fopen(candidates[i], "rb");
+
+    if (g_config.sys.files.ep_rom_path && g_config.sys.files.ep_rom_path[0] != '\0') {
+        f = fopen(g_config.sys.files.ep_rom_path, "rb");
         if (f) {
-            found_path = candidates[i];
-            break;
+            found_path = g_config.sys.files.ep_rom_path;
+        } else {
+            fprintf(stderr, "[APU EP] Warning: Failed to open configured EP ROM at '%s'\n",
+                    g_config.sys.files.ep_rom_path);
+        }
+    }
+
+    if (!f) {
+        const char *candidates[] = {
+            "./dolby_ep.bin",
+            "./tools/dolby_ep.bin",
+            "../tools/dolby_ep.bin",
+            NULL
+        };
+
+        for (int i = 0; candidates[i] != NULL; i++) {
+            f = fopen(candidates[i], "rb");
+            if (f) {
+                found_path = candidates[i];
+                break;
+            }
         }
     }
 

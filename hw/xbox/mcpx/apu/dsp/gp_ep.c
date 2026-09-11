@@ -293,63 +293,6 @@ static void ep_fifo_rw(void *opaque, uint8_t *ptr, unsigned int index,
     SET_MASK(d->ep.regs[cur_reg], NV_PAPU_GPOFCUR0_VALUE, cur);
 }
 
-static void ep_drain_output_fifo0(MCPXAPUState *d)
-{
-    const uint32_t drain_len = NUM_SAMPLES_PER_FRAME * 4; /* 32 stereo samples * 4 bytes/sample = 128 bytes */
-
-    /* Drain Output FIFO 0 */
-    uint32_t base = GET_MASK(d->regs[NV_PAPU_EPOFBASE0] | d->ep.regs[NV_PAPU_EPOFBASE0],
-                             NV_PAPU_GPOFBASE0_VALUE);
-    uint32_t end = GET_MASK(d->regs[NV_PAPU_EPOFEND0] | d->ep.regs[NV_PAPU_EPOFEND0],
-                            NV_PAPU_GPOFEND0_VALUE);
-    if (end > base) {
-        uint32_t cur = GET_MASK(d->regs[NV_PAPU_EPOFCUR0] | d->ep.regs[NV_PAPU_EPOFCUR0],
-                                NV_PAPU_GPOFCUR0_VALUE);
-        if (cur >= end) {
-            cur = base + ((cur - base) % (end - base));
-        }
-        if (cur < base) {
-            cur = base;
-        }
-
-        hwaddr sge_base = d->regs[NV_PAPU_EPFADDR] | d->ep.regs[NV_PAPU_EPFADDR];
-        unsigned int max_sge = d->regs[NV_PAPU_EPFMAXSGE] | d->ep.regs[NV_PAPU_EPFMAXSGE];
-
-        uint8_t temp_buf[128];
-
-        cur = circular_scatter_gather_rw(d,
-            sge_base, max_sge,
-            temp_buf, base, end, cur, drain_len, false);
-
-        SET_MASK(d->regs[NV_PAPU_EPOFCUR0], NV_PAPU_GPOFCUR0_VALUE, cur);
-        SET_MASK(d->ep.regs[NV_PAPU_EPOFCUR0], NV_PAPU_GPOFCUR0_VALUE, cur);
-    }
-
-    /* Advance Input FIFO 0 if active so guest driver sees input samples consumed */
-    uint32_t in_base = GET_MASK(d->regs[NV_PAPU_EPIFBASE0] | d->ep.regs[NV_PAPU_EPIFBASE0],
-                                NV_PAPU_GPOFBASE0_VALUE);
-    uint32_t in_end = GET_MASK(d->regs[NV_PAPU_EPIFEND0] | d->ep.regs[NV_PAPU_EPIFEND0],
-                              NV_PAPU_GPOFEND0_VALUE);
-    if (in_end > in_base) {
-        uint32_t in_cur = GET_MASK(d->regs[NV_PAPU_EPIFCUR0] | d->ep.regs[NV_PAPU_EPIFCUR0],
-                                   NV_PAPU_GPOFCUR0_VALUE);
-        if (in_cur >= in_end) {
-            in_cur = in_base + ((in_cur - in_base) % (in_end - in_base));
-        }
-        if (in_cur < in_base) {
-            in_cur = in_base;
-        }
-
-        in_cur += drain_len;
-        if (in_cur >= in_end) {
-            in_cur = in_base + ((in_cur - in_base) % (in_end - in_base));
-        }
-
-        SET_MASK(d->regs[NV_PAPU_EPIFCUR0], NV_PAPU_GPOFCUR0_VALUE, in_cur);
-        SET_MASK(d->ep.regs[NV_PAPU_EPIFCUR0], NV_PAPU_GPOFCUR0_VALUE, in_cur);
-    }
-}
-
 static void proc_rst_write(DSPState *dsp, uint32_t oldval, uint32_t val)
 {
     if (!(val & NV_PAPU_GPRST_GPRST) || !(val & NV_PAPU_GPRST_GPDSPRST)) {
@@ -485,14 +428,6 @@ static uint64_t ep_read(void *opaque, hwaddr addr, unsigned int size)
         // fprintf(stderr, "read EP  NV_PAPU_EPPMEM [%x] -> %x\n", paddr, r);
         break;
     }
-    case 0x5F10:
-    case 0x5F14:
-        if (!d->is_5_1_active) {
-            r = 0;
-            break;
-        }
-        r = d->ep.regs[addr];
-        break;
     default:
         r = d->ep.regs[addr];
         break;
@@ -537,16 +472,6 @@ static void ep_write(void *opaque, hwaddr addr, uint64_t val, unsigned int size)
         d->ep.regs[NV_PAPU_EPRST] = val;
         d->ep_frame_div = 0; /* FIXME: Still unsure about frame sync */
         break;
-    case 0x5F10:
-    case 0x5F14:
-        d->ep.regs[addr] = val;
-        qatomic_set(&d->regs[addr], val);
-        if (!d->is_5_1_active) {
-            /* Handshake acknowledgment spoofing for stereo fallback */
-            d->ep.regs[addr] = 0;
-            qatomic_set(&d->regs[addr], 0);
-        }
-        break;
     default:
         d->ep.regs[addr] = val;
         break;
@@ -562,13 +487,6 @@ const MemoryRegionOps ep_ops = {
 
 void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME])
 {
-    if (!d->is_5_1_active) {
-        d->ep.regs[0x5F10] = 0;
-        d->ep.regs[0x5F14] = 0;
-        qatomic_set(&d->regs[0x5F10], 0);
-        qatomic_set(&d->regs[0x5F14], 0);
-    }
-
     /* Write VP results to the GP DSP MIXBUF */
     for (int mixbin = 0; mixbin < NUM_MIXBINS; mixbin++) {
         uint32_t base = GP_DSP_MIXBUF_BASE + mixbin * NUM_SAMPLES_PER_FRAME;
@@ -668,33 +586,29 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
 
     /* Run EP */
     if (ep_enabled) {
-        if (d->is_5_1_active) {
-            uint32_t reset_vec =
-                dsp_read_memory(d->ep.dsp, 'P', 0x0000) & 0x00ffffff;
-            if (reset_vec != 0 && reset_vec != 0x00cacaca) {
-                static bool detected = false;
-                if (!detected) {
-                    fprintf(stderr,
-                            "[EP LITMUS] Guest DMA Detected! Reset vector P:0x0000 = 0x%06X (PC: 0x%06X)\n",
-                            reset_vec, dsp_get_pc(d->ep.dsp));
-                    detected = true;
-                }
-
-                dsp_start_frame(d->ep.dsp);
-                d->ep.dsp->hsr |= DSP_HSR_HRDF;
-                int cycle_budget = EP_SUBFRAME_CYCLES;
-                dsp_set_cycle_count(d->ep.dsp, 0);
-                dsp_set_halt_requested(d->ep.dsp, false);
-
-                while (cycle_budget > 0 && !dsp_get_halt_requested(d->ep.dsp)) {
-                    int step_chunk = (cycle_budget > 1000) ? 1000 : cycle_budget;
-                    dsp_run(d->ep.dsp, step_chunk);
-                    cycle_budget -= step_chunk;
-                }
-                g_dbg.ep.cycles = dsp_get_cycle_count(d->ep.dsp);
+        uint32_t reset_vec =
+            dsp_read_memory(d->ep.dsp, 'P', 0x0000) & 0x00ffffff;
+        if (reset_vec != 0 && reset_vec != 0x00cacaca) {
+            static bool detected = false;
+            if (!detected) {
+                fprintf(stderr,
+                        "[EP LITMUS] Guest DMA Detected! Reset vector P:0x0000 = 0x%06X (PC: 0x%06X)\n",
+                        reset_vec, dsp_get_pc(d->ep.dsp));
+                detected = true;
             }
-        } else {
-            ep_drain_output_fifo0(d);
+
+            dsp_start_frame(d->ep.dsp);
+            d->ep.dsp->hsr |= DSP_HSR_HRDF;
+            int cycle_budget = EP_SUBFRAME_CYCLES;
+            dsp_set_cycle_count(d->ep.dsp, 0);
+            dsp_set_halt_requested(d->ep.dsp, false);
+
+            while (cycle_budget > 0 && !dsp_get_halt_requested(d->ep.dsp)) {
+                int step_chunk = (cycle_budget > 1000) ? 1000 : cycle_budget;
+                dsp_run(d->ep.dsp, step_chunk);
+                cycle_budget -= step_chunk;
+            }
+            g_dbg.ep.cycles = dsp_get_cycle_count(d->ep.dsp);
         }
     }
 }

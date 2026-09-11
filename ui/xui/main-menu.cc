@@ -837,6 +837,12 @@ void MainMenuDisplayView::Draw()
 
 void MainMenuAudioView::Draw()
 {
+    static const SDL_DialogFileFilter rom_file_filters[] = {
+        { ".bin Files", "bin" },
+        { ".rom Files", "rom" },
+        { "All Files", "*" }
+    };
+
     SectionTitle("Volume");
     char buf[32];
     snprintf(buf, sizeof(buf), "Limit output volume (%d%%)",
@@ -849,6 +855,12 @@ void MainMenuAudioView::Draw()
     Toggle("DSP JIT engine", &g_config.audio.use_dsp_jit,
            "Use DSP JIT engine");
 
+    SectionTitle("Firmware");
+    FilePicker("DSP EP ROM", g_config.sys.files.ep_rom_path,
+               rom_file_filters, 3, false, [](const char *path) {
+                   xemu_settings_set_string(&g_config.sys.files.ep_rom_path, path);
+                   g_main_menu.UpdateAboutViewConfigInfo();
+               });
 }
 
 NetworkInterface::NetworkInterface(pcap_if_t *pcap_desc, char *_friendlyname)
@@ -1563,6 +1575,12 @@ void MainMenuSystemView::Draw()
                    m_dirty = true;
                    g_main_menu.UpdateAboutViewConfigInfo();
                });
+    FilePicker("DSP EP ROM", g_config.sys.files.ep_rom_path,
+               rom_file_filters, 3, false, [this](const char *path) {
+                   xemu_settings_set_string(&g_config.sys.files.ep_rom_path, path);
+                   m_dirty = true;
+                   g_main_menu.UpdateAboutViewConfigInfo();
+               });
     FilePicker("Hard Disk", g_config.sys.files.hdd_path,
                qcow_file_filters, 2, false, [this](const char *path) {
                    xemu_settings_set_string(&g_config.sys.files.hdd_path, path);
@@ -1597,11 +1615,19 @@ void MainMenuAboutView::UpdateConfigInfoText()
         flash_rom_checksum = g_strdup("None");
     }
 
+    gchar *ep_rom_checksum =
+        GetFileMD5Checksum(g_config.sys.files.ep_rom_path);
+    if (!ep_rom_checksum) {
+        ep_rom_checksum = g_strdup("None");
+    }
+
     m_config_info_text = g_strdup_printf("MCPX Boot ROM MD5 Hash:        %s\n"
-                                         "Flash ROM (BIOS) MD5 Hash:     %s",
-                                         bootrom_checksum, flash_rom_checksum);
+                                         "Flash ROM (BIOS) MD5 Hash:     %s\n"
+                                         "DSP EP ROM MD5 Hash:           %s",
+                                         bootrom_checksum, flash_rom_checksum, ep_rom_checksum);
     g_free(bootrom_checksum);
     g_free(flash_rom_checksum);
+    g_free(ep_rom_checksum);
 }
 
 void MainMenuAboutView::Draw()

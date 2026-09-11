@@ -52,17 +52,6 @@ static uint64_t mcpx_apu_read(void *opaque, hwaddr addr, unsigned int size)
     case NV_PAPU_XGSCNT:
         r = (uint64_t)d->ep_frame_div * NUM_SAMPLES_PER_FRAME;
         break;
-    case 0x5F10:
-    case 0x5F14:
-    case 0x55F10:
-    case 0x55F14:
-        if (!d->is_5_1_active) {
-            r = 0;
-        } else {
-            uint32_t ep_offset = (addr >= 0x50000) ? (addr - 0x50000) : addr;
-            r = d->ep.regs[ep_offset];
-        }
-        break;
     default:
         if (addr < 0x20000) {
             r = qatomic_read(&d->regs[addr]);
@@ -100,21 +89,6 @@ static void mcpx_apu_write(void *opaque, hwaddr addr, uint64_t val,
         stl_le_phys(&address_space_memory, d->regs[NV_PAPU_FEMEMADDR], val);
         qatomic_set(&d->regs[addr], val);
         break;
-    case 0x5F10:
-    case 0x5F14:
-    case 0x55F10:
-    case 0x55F14: {
-        uint32_t ep_offset = (addr >= 0x50000) ? (addr - 0x50000) : addr;
-        if (!d->is_5_1_active) {
-            /* Handshake acknowledgment spoofing for stereo fallback */
-            qatomic_set(&d->regs[ep_offset], 0);
-            d->ep.regs[ep_offset] = 0;
-        } else {
-            qatomic_set(&d->regs[ep_offset], val);
-            d->ep.regs[ep_offset] = val;
-        }
-        break;
-    }
     default:
         if (addr < 0x20000) {
             qatomic_set(&d->regs[addr], val);
