@@ -309,18 +309,7 @@ bool dsp_bootstrap_ep_firmware(DSPState *dsp)
 void dsp_bootstrap(DSPState *dsp)
 {
     if (!dsp->is_gp) {
-        if (!dsp_bootstrap_ep_firmware(dsp)) {
-            dsp_write_memory(dsp, 'P', 0x0000, 0x000086);
-            dsp_write_memory(dsp, 'P', 0x0001, 0x0AF080);
-            dsp_write_memory(dsp, 'P', 0x0002, 0x000000);
-            dsp_invalidate_opcache(dsp);
-            static bool stub_logged = false;
-            if (!stub_logged) {
-                fprintf(stderr,
-                        "[APU EP] Initialized open-source fallback DSP stub at P:0x0000 for stereo playback\n");
-                stub_logged = true;
-            }
-        }
+        dsp_bootstrap_ep_firmware(dsp);
     } else {
         dsp->ops->bootstrap(dsp);
     }

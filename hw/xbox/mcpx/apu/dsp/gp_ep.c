@@ -646,10 +646,10 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
 
     /* Run EP */
     if (ep_enabled) {
-        uint32_t reset_vec =
-            dsp_read_memory(d->ep.dsp, 'P', 0x0000) & 0x00ffffff;
-        if (reset_vec != 0 && reset_vec != 0x00cacaca) {
-            if (reset_vec != 0x000086) {
+        if (d->is_5_1_active) {
+            uint32_t reset_vec =
+                dsp_read_memory(d->ep.dsp, 'P', 0x0000) & 0x00ffffff;
+            if (reset_vec != 0 && reset_vec != 0x00cacaca) {
                 static bool detected = false;
                 if (!detected) {
                     fprintf(stderr,
@@ -657,23 +657,21 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
                             reset_vec, dsp_get_pc(d->ep.dsp));
                     detected = true;
                 }
+
+                dsp_start_frame(d->ep.dsp);
+                d->ep.dsp->hsr |= DSP_HSR_HRDF;
+                int cycle_budget = EP_SUBFRAME_CYCLES;
+                dsp_set_cycle_count(d->ep.dsp, 0);
+                dsp_set_halt_requested(d->ep.dsp, false);
+
+                while (cycle_budget > 0 && !dsp_get_halt_requested(d->ep.dsp)) {
+                    int step_chunk = (cycle_budget > 1000) ? 1000 : cycle_budget;
+                    dsp_run(d->ep.dsp, step_chunk);
+                    cycle_budget -= step_chunk;
+                }
+                g_dbg.ep.cycles = dsp_get_cycle_count(d->ep.dsp);
             }
-
-            dsp_start_frame(d->ep.dsp);
-            d->ep.dsp->hsr |= DSP_HSR_HRDF;
-            int cycle_budget = EP_SUBFRAME_CYCLES;
-            dsp_set_cycle_count(d->ep.dsp, 0);
-            dsp_set_halt_requested(d->ep.dsp, false);
-
-            while (cycle_budget > 0 && !dsp_get_halt_requested(d->ep.dsp)) {
-                int step_chunk = (cycle_budget > 1000) ? 1000 : cycle_budget;
-                dsp_run(d->ep.dsp, step_chunk);
-                cycle_budget -= step_chunk;
-            }
-            g_dbg.ep.cycles = dsp_get_cycle_count(d->ep.dsp);
-        }
-
-        if (!d->is_5_1_active && (d->ep_frame_div % 8 == 0)) {
+        } else {
             ep_drain_output_fifo0(d);
         }
     }
