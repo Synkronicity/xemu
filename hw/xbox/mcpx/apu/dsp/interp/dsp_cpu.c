@@ -112,13 +112,13 @@ static const int registers_mask[64] = {
     24, 24, 8, 8,
     24, 24, 24, 24,
 
-    16, 16, 16, 16,
-    16, 16, 16, 16,
-    16, 16, 16, 16,
-    16, 16, 16, 16,
+    24, 24, 24, 24,
+    24, 24, 24, 24,
+    24, 24, 24, 24,
+    24, 24, 24, 24,
 
-    16, 16, 16, 16,
-    16, 16, 16, 16,
+    24, 24, 24, 24,
+    24, 24, 24, 24,
     0, 0, 0, 0,
     0, 0, 0, 0,
 
@@ -381,7 +381,7 @@ void dsp56k_reset_cpu(dsp_core_t* dsp)
     dsp->pc = 0x0000;
     dsp->registers[DSP_REG_OMR]=0x02;
     for (i=0;i<8;i++) {
-        dsp->registers[DSP_REG_M0+i]=0x00ffff;
+        dsp->registers[DSP_REG_M0+i]=0xffffff;
     }
 
     /* Interruptions */

@@ -48,17 +48,23 @@ static void emu_update_rn_bitreverse(dsp_core_t* dsp, uint32_t numreg)
     uint32_t value, r_reg;
 
     /* Check how many bits to reverse */
-    value = dsp->registers[DSP_REG_N0+numreg];
-    for (revbits=0;revbits<16;revbits++) {
+    value = dsp->registers[DSP_REG_N0+numreg] & BITMASK(24);
+    if (value == 0) {
+        return;
+    }
+    for (revbits=0;revbits<24;revbits++) {
         if (value & (1<<revbits)) {
             break;
         }
     }
     revbits++;
+    if (revbits > 24) {
+        revbits = 24;
+    }
 
     /* Reverse Rn bits */
-    r_reg = dsp->registers[DSP_REG_R0+numreg];
-    value = r_reg & (BITMASK(16)-BITMASK(revbits));
+    r_reg = dsp->registers[DSP_REG_R0+numreg] & BITMASK(24);
+    value = r_reg & (BITMASK(24)-BITMASK(revbits));
     for (i=0;i<revbits;i++) {
         if (r_reg & (1<<i)) {
             value |= 1<<(revbits-i-1);
@@ -70,80 +76,81 @@ static void emu_update_rn_bitreverse(dsp_core_t* dsp, uint32_t numreg)
     value &= BITMASK(revbits);
 
     /* Reverse Rn bits */
-    r_reg &= (BITMASK(16)-BITMASK(revbits));
+    r_reg &= (BITMASK(24)-BITMASK(revbits));
     r_reg |= value;
 
-    value = r_reg & (BITMASK(16)-BITMASK(revbits));
+    value = r_reg & (BITMASK(24)-BITMASK(revbits));
     for (i=0;i<revbits;i++) {
         if (r_reg & (1<<i)) {
             value |= 1<<(revbits-i-1);
         }
     }
 
-    dsp->registers[DSP_REG_R0+numreg] = value;
+    dsp->registers[DSP_REG_R0+numreg] = value & BITMASK(24);
 }
 
-static void emu_update_rn_modulo(dsp_core_t* dsp, uint32_t numreg, int16_t modifier)
+static void emu_update_rn_modulo(dsp_core_t* dsp, uint32_t numreg, int32_t modifier)
 {
-    uint16_t bufsize, modulo, lobound, hibound, bufmask;
-    int16_t r_reg, orig_modifier=modifier;
+    uint32_t m_low = dsp->registers[DSP_REG_M0+numreg] & 0xFFFF;
+    uint32_t modulo = (m_low & 0x7FFF) + 1;
+    uint32_t bufsize = 1;
 
-    modulo = dsp->registers[DSP_REG_M0+numreg]+1;
-    bufsize = 1;
-    bufmask = BITMASK(16);
     while (bufsize < modulo) {
         bufsize <<= 1;
-        bufmask <<= 1;
     }
 
-    lobound = dsp->registers[DSP_REG_R0+numreg] & bufmask;
-    hibound = lobound + modulo - 1;
+    uint32_t bufmask = BITMASK(24) & ~(bufsize - 1);
+    uint32_t r_reg = dsp->registers[DSP_REG_R0+numreg] & BITMASK(24);
+    uint32_t lobound = r_reg & bufmask;
+    uint32_t hibound = lobound + modulo - 1;
 
-    r_reg = (int16_t) dsp->registers[DSP_REG_R0+numreg];
+    int64_t next_r = (int64_t)r_reg + modifier;
 
-    if (orig_modifier>modulo) {
-        while (modifier>bufsize) {
-            r_reg += bufsize;
-            modifier -= bufsize;
-        }
-        while (modifier<-bufsize) {
-            r_reg -= bufsize;
-            modifier += bufsize;
-        }
+    if (next_r > hibound) {
+        r_reg = lobound + ((uint32_t)(next_r - lobound) % modulo);
+    } else if (next_r < lobound) {
+        int64_t dist = (int64_t)hibound - next_r;
+        r_reg = hibound - ((uint32_t)dist % modulo);
+    } else {
+        r_reg = (uint32_t)next_r;
     }
 
-    r_reg += modifier;
-
-    if (orig_modifier!=modulo) {
-        if (r_reg>hibound) {
-            r_reg -= modulo;
-        } else if (r_reg<lobound) {
-            r_reg += modulo;
-        }
-    }
-
-    dsp->registers[DSP_REG_R0+numreg] = ((uint32_t) r_reg) & BITMASK(16);
+    dsp->registers[DSP_REG_R0+numreg] = r_reg & BITMASK(24);
 }
 
-static void emu_update_rn(dsp_core_t* dsp, uint32_t numreg, int16_t modifier)
+static void emu_update_rn_multiple_wrap(dsp_core_t* dsp, uint32_t numreg, int32_t modifier)
 {
-    int16_t value;
-    uint16_t m_reg;
+    uint32_t m_low = dsp->registers[DSP_REG_M0+numreg] & 0xFFFF;
+    uint32_t modulo = (m_low & 0x3FFF) + 1;
+    uint32_t mask = modulo - 1;
+    uint32_t r_reg = dsp->registers[DSP_REG_R0+numreg] & BITMASK(24);
+    uint32_t base = r_reg & ~mask;
+    uint32_t offset = ((r_reg & mask) + (uint32_t)modifier) & mask;
 
-    m_reg = (uint16_t) dsp->registers[DSP_REG_M0+numreg];
-    if (m_reg == 65535) {
+    dsp->registers[DSP_REG_R0+numreg] = (base | offset) & BITMASK(24);
+}
+
+static void emu_update_rn(dsp_core_t* dsp, uint32_t numreg, int32_t modifier)
+{
+    uint32_t m_low = dsp->registers[DSP_REG_M0+numreg] & 0xFFFF;
+
+    if (m_low == 0xFFFF) {
         /* Linear addressing mode */
-        value = (int16_t) dsp->registers[DSP_REG_R0+numreg];
-        value += modifier;
-        dsp->registers[DSP_REG_R0+numreg] = ((uint32_t) value) & BITMASK(16);
-    } else if (m_reg == 0) {
+        uint32_t r_reg = dsp->registers[DSP_REG_R0+numreg] & BITMASK(24);
+        dsp->registers[DSP_REG_R0+numreg] = (r_reg + (uint32_t)modifier) & BITMASK(24);
+    } else if (m_low == 0x0000) {
         /* Bit reversed carry update */
         emu_update_rn_bitreverse(dsp, numreg);
-    } else if (m_reg<=32767) {
+    } else if ((m_low & 0xC000) == 0x8000 && (m_low & 0x3FFF) != 0) {
+        /* Multiple wrap-around modulo addressing mode */
+        emu_update_rn_multiple_wrap(dsp, numreg, modifier);
+    } else if (m_low > 0 && m_low <= 0x7FFF) {
         /* Modulo update */
         emu_update_rn_modulo(dsp, numreg, modifier);
     } else {
-        /* Undefined */
+        /* Reserved / undefined - default to linear addressing */
+        uint32_t r_reg = dsp->registers[DSP_REG_R0+numreg] & BITMASK(24);
+        dsp->registers[DSP_REG_R0+numreg] = (r_reg + (uint32_t)modifier) & BITMASK(24);
     }
 }
 
@@ -156,40 +163,40 @@ static int emu_calc_ea(dsp_core_t* dsp, uint32_t ea_mode, uint32_t *dst_addr)
     switch (value) {
         case 0:
             /* (Rx)-Nx */
-            *dst_addr = dsp->registers[DSP_REG_R0+numreg];
-            emu_update_rn(dsp, numreg, -dsp->registers[DSP_REG_N0+numreg]);
+            *dst_addr = dsp->registers[DSP_REG_R0+numreg] & BITMASK(24);
+            emu_update_rn(dsp, numreg, -(int32_t)dsp_signextend(24, dsp->registers[DSP_REG_N0+numreg]));
             break;
         case 1:
             /* (Rx)+Nx */
-            *dst_addr = dsp->registers[DSP_REG_R0+numreg];
-            emu_update_rn(dsp, numreg, dsp->registers[DSP_REG_N0+numreg]);
+            *dst_addr = dsp->registers[DSP_REG_R0+numreg] & BITMASK(24);
+            emu_update_rn(dsp, numreg, (int32_t)dsp_signextend(24, dsp->registers[DSP_REG_N0+numreg]));
             break;
         case 2:
             /* (Rx)- */
-            *dst_addr = dsp->registers[DSP_REG_R0+numreg];
+            *dst_addr = dsp->registers[DSP_REG_R0+numreg] & BITMASK(24);
             emu_update_rn(dsp, numreg, -1);
             break;
         case 3:
             /* (Rx)+ */
-            *dst_addr = dsp->registers[DSP_REG_R0+numreg];
+            *dst_addr = dsp->registers[DSP_REG_R0+numreg] & BITMASK(24);
             emu_update_rn(dsp, numreg, +1);
             break;
         case 4:
             /* (Rx) */
-            *dst_addr = dsp->registers[DSP_REG_R0+numreg];
+            *dst_addr = dsp->registers[DSP_REG_R0+numreg] & BITMASK(24);
             break;
         case 5:
             /* (Rx+Nx) */
             dsp->instr_cycle += 2;
             curreg = dsp->registers[DSP_REG_R0+numreg];
-            emu_update_rn(dsp, numreg, dsp->registers[DSP_REG_N0+numreg]);
-            *dst_addr = dsp->registers[DSP_REG_R0+numreg];
+            emu_update_rn(dsp, numreg, (int32_t)dsp_signextend(24, dsp->registers[DSP_REG_N0+numreg]));
+            *dst_addr = dsp->registers[DSP_REG_R0+numreg] & BITMASK(24);
             dsp->registers[DSP_REG_R0+numreg] = curreg;
             break;
         case 6:
             /* aa */
             dsp->instr_cycle += 2;
-            *dst_addr = read_memory_p(dsp, dsp->pc+1);
+            *dst_addr = read_memory_p(dsp, dsp->pc+1) & BITMASK(24);
             dsp->cur_inst_len++;
             if (numreg != 0) {
                 return 1; /* immediate value */
@@ -199,7 +206,7 @@ static int emu_calc_ea(dsp_core_t* dsp, uint32_t ea_mode, uint32_t *dst_addr)
             /* -(Rx) */
             dsp->instr_cycle += 2;
             emu_update_rn(dsp, numreg, -1);
-            *dst_addr = dsp->registers[DSP_REG_R0+numreg];
+            *dst_addr = dsp->registers[DSP_REG_R0+numreg] & BITMASK(24);
             break;
     }
     /* address */
