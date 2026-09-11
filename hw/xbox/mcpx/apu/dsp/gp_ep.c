@@ -410,6 +410,14 @@ static uint64_t ep_read(void *opaque, hwaddr addr, unsigned int size)
         // fprintf(stderr, "read EP  NV_PAPU_EPPMEM [%x] -> %x\n", paddr, r);
         break;
     }
+    case 0x5F10:
+    case 0x5F14:
+        if (!d->is_5_1_active) {
+            r = 0;
+            break;
+        }
+        r = d->ep.regs[addr];
+        break;
     default:
         r = d->ep.regs[addr];
         break;
@@ -454,6 +462,16 @@ static void ep_write(void *opaque, hwaddr addr, uint64_t val, unsigned int size)
         d->ep.regs[NV_PAPU_EPRST] = val;
         d->ep_frame_div = 0; /* FIXME: Still unsure about frame sync */
         break;
+    case 0x5F10:
+    case 0x5F14:
+        d->ep.regs[addr] = val;
+        qatomic_set(&d->regs[addr], val);
+        if (!d->is_5_1_active) {
+            /* Handshake acknowledgment spoofing for stereo fallback */
+            d->ep.regs[addr] = 0;
+            qatomic_set(&d->regs[addr], 0);
+        }
+        break;
     default:
         d->ep.regs[addr] = val;
         break;
@@ -469,6 +487,13 @@ const MemoryRegionOps ep_ops = {
 
 void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME])
 {
+    if (!d->is_5_1_active) {
+        d->ep.regs[0x5F10] = 0;
+        d->ep.regs[0x5F14] = 0;
+        qatomic_set(&d->regs[0x5F10], 0);
+        qatomic_set(&d->regs[0x5F14], 0);
+    }
+
     /* Write VP results to the GP DSP MIXBUF */
     for (int mixbin = 0; mixbin < NUM_MIXBINS; mixbin++) {
         uint32_t base = GP_DSP_MIXBUF_BASE + mixbin * NUM_SAMPLES_PER_FRAME;
