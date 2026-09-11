@@ -2,6 +2,7 @@
  * DSP56300 emulator
  *
  * Copyright (c) 2015 espes
+ * Copyright (c) 2026 Will Bonnett
  *
  * Adapted from Hatari DSP M56001 emulation
  * (C) 2003-2008 ARAnyM developer team

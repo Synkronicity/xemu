@@ -3,6 +3,7 @@
  *
  * Copyright (c) 2015 espes
  * Copyright (c) 2020-2025 Matt Borgerson
+ * Copyright (c) 2026 Will Bonnett
  *
  * Adapted from Hatari DSP M56001 emulation
  * (C) 2003-2008 ARAnyM developer team

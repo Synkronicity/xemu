@@ -2,6 +2,7 @@
  * QEMU MCPX Audio Processing Unit implementation
  *
  * Copyright (c) 2019-2025 Matt Borgerson
+ * Copyright (c) 2026 Will Bonnett
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
