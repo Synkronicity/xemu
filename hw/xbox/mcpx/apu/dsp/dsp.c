@@ -221,6 +221,10 @@ void dsp_run(DSPState *dsp, int cycles)
 
 bool dsp_bootstrap_ep_firmware(DSPState *dsp)
 {
+    if (getenv("XEMU_NO_BYOF") != NULL) {
+        return false;
+    }
+
     const char *candidates[] = {
         "./dolby_ep.bin",
         "./tools/dolby_ep.bin",
@@ -305,7 +309,18 @@ bool dsp_bootstrap_ep_firmware(DSPState *dsp)
 void dsp_bootstrap(DSPState *dsp)
 {
     if (!dsp->is_gp) {
-        dsp_bootstrap_ep_firmware(dsp);
+        if (!dsp_bootstrap_ep_firmware(dsp)) {
+            dsp_write_memory(dsp, 'P', 0x0000, 0x000086);
+            dsp_write_memory(dsp, 'P', 0x0001, 0x0AF080);
+            dsp_write_memory(dsp, 'P', 0x0002, 0x000000);
+            dsp_invalidate_opcache(dsp);
+            static bool stub_logged = false;
+            if (!stub_logged) {
+                fprintf(stderr,
+                        "[APU EP] Initialized open-source fallback DSP stub at P:0x0000 for stereo playback\n");
+                stub_logged = true;
+            }
+        }
     } else {
         dsp->ops->bootstrap(dsp);
     }

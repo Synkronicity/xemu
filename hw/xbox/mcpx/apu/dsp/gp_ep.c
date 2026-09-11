@@ -237,16 +237,20 @@ static void ep_fifo_rw(void *opaque, uint8_t *ptr, unsigned int index,
     hwaddr cur_reg;
     if (dir) {
         assert(index < EP_OUTPUT_FIFO_COUNT);
-        base = GET_MASK(d->regs[NV_PAPU_EPOFBASE0 + 0x10 * index],
+        base = GET_MASK(d->regs[NV_PAPU_EPOFBASE0 + 0x10 * index] |
+                        d->ep.regs[NV_PAPU_EPOFBASE0 + 0x10 * index],
                         NV_PAPU_GPOFBASE0_VALUE);
-        end = GET_MASK(d->regs[NV_PAPU_EPOFEND0 + 0x10 * index],
+        end = GET_MASK(d->regs[NV_PAPU_EPOFEND0 + 0x10 * index] |
+                       d->ep.regs[NV_PAPU_EPOFEND0 + 0x10 * index],
                        NV_PAPU_GPOFEND0_VALUE);
         cur_reg = NV_PAPU_EPOFCUR0 + 0x10 * index;
     } else {
         assert(index < EP_INPUT_FIFO_COUNT);
-        base = GET_MASK(d->regs[NV_PAPU_EPIFBASE0 + 0x10 * index],
+        base = GET_MASK(d->regs[NV_PAPU_EPIFBASE0 + 0x10 * index] |
+                        d->ep.regs[NV_PAPU_EPIFBASE0 + 0x10 * index],
                         NV_PAPU_GPOFBASE0_VALUE);
-        end = GET_MASK(d->regs[NV_PAPU_EPIFEND0 + 0x10 * index],
+        end = GET_MASK(d->regs[NV_PAPU_EPIFEND0 + 0x10 * index] |
+                       d->ep.regs[NV_PAPU_EPIFEND0 + 0x10 * index],
                        NV_PAPU_GPOFEND0_VALUE);
         cur_reg = NV_PAPU_EPIFCUR0 + 0x10 * index;
     }
@@ -255,7 +259,7 @@ static void ep_fifo_rw(void *opaque, uint8_t *ptr, unsigned int index,
         return;
     }
 
-    uint32_t cur = GET_MASK(d->regs[cur_reg], NV_PAPU_GPOFCUR0_VALUE);
+    uint32_t cur = GET_MASK(d->regs[cur_reg] | d->ep.regs[cur_reg], NV_PAPU_GPOFCUR0_VALUE);
 
     // fprintf(stderr, "EP %s fifo #%d, base = %x, end = %x, cur = %x, len = %x\n",
     //     dir ? "writing to" : "reading from", index,
@@ -270,16 +274,19 @@ static void ep_fifo_rw(void *opaque, uint8_t *ptr, unsigned int index,
         }
     }
 
-    /* DSP hangs if current >= end; but forces current >= base */
+    /* Circular modulo boundary wrapping relative to base */
     if (cur >= end) {
-        cur = cur % (end - base);
+        cur = base + ((cur - base) % (end - base));
     }
     if (cur < base) {
         cur = base;
     }
 
+    hwaddr sge_base = d->regs[NV_PAPU_EPFADDR] | d->ep.regs[NV_PAPU_EPFADDR];
+    unsigned int max_sge = d->regs[NV_PAPU_EPFMAXSGE] | d->ep.regs[NV_PAPU_EPFMAXSGE];
+
     cur = circular_scatter_gather_rw(d,
-        d->regs[NV_PAPU_EPFADDR], d->regs[NV_PAPU_EPFMAXSGE],
+        sge_base, max_sge,
         ptr, base, end, cur, len, dir);
 
     SET_MASK(d->regs[cur_reg], NV_PAPU_GPOFCUR0_VALUE, cur);
@@ -288,25 +295,31 @@ static void ep_fifo_rw(void *opaque, uint8_t *ptr, unsigned int index,
 
 static void ep_drain_output_fifo0(MCPXAPUState *d)
 {
-    uint32_t base = GET_MASK(d->regs[NV_PAPU_EPOFBASE0], NV_PAPU_GPOFBASE0_VALUE);
-    uint32_t end = GET_MASK(d->regs[NV_PAPU_EPOFEND0], NV_PAPU_GPOFEND0_VALUE);
+    uint32_t base = GET_MASK(d->regs[NV_PAPU_EPOFBASE0] | d->ep.regs[NV_PAPU_EPOFBASE0],
+                             NV_PAPU_GPOFBASE0_VALUE);
+    uint32_t end = GET_MASK(d->regs[NV_PAPU_EPOFEND0] | d->ep.regs[NV_PAPU_EPOFEND0],
+                            NV_PAPU_GPOFEND0_VALUE);
     if (end <= base) {
         return;
     }
 
-    uint32_t cur = GET_MASK(d->regs[NV_PAPU_EPOFCUR0], NV_PAPU_GPOFCUR0_VALUE);
+    uint32_t cur = GET_MASK(d->regs[NV_PAPU_EPOFCUR0] | d->ep.regs[NV_PAPU_EPOFCUR0],
+                            NV_PAPU_GPOFCUR0_VALUE);
     if (cur >= end) {
-        cur = cur % (end - base);
+        cur = base + ((cur - base) % (end - base));
     }
     if (cur < base) {
         cur = base;
     }
 
+    hwaddr sge_base = d->regs[NV_PAPU_EPFADDR] | d->ep.regs[NV_PAPU_EPFADDR];
+    unsigned int max_sge = d->regs[NV_PAPU_EPFMAXSGE] | d->ep.regs[NV_PAPU_EPFMAXSGE];
+
     uint8_t temp_buf[sizeof(d->monitor.frame_buf)];
     size_t len = sizeof(d->monitor.frame_buf);
 
     cur = circular_scatter_gather_rw(d,
-        d->regs[NV_PAPU_EPFADDR], d->regs[NV_PAPU_EPFMAXSGE],
+        sge_base, max_sge,
         temp_buf, base, end, cur, len, false);
 
     SET_MASK(d->regs[NV_PAPU_EPOFCUR0], NV_PAPU_GPOFCUR0_VALUE, cur);
@@ -632,26 +645,18 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
     }
 
     /* Run EP */
-    bool ep_active = d->is_5_1_active &&
-                     (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
-                     (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPDSPRST);
-    if (ep_active) {
+    if (ep_enabled) {
         uint32_t reset_vec =
             dsp_read_memory(d->ep.dsp, 'P', 0x0000) & 0x00ffffff;
-        if (reset_vec == 0 || reset_vec == 0x00cacaca) {
-            ep_active = false;
-        }
-    }
-
-    if (ep_active) {
-        if (d->ep_frame_div % 8 == 0) {
-            static bool detected = false;
-            if (!detected) {
-                fprintf(stderr,
-                        "[EP LITMUS] Guest DMA Detected! Reset vector P:0x0000 = 0x%06X (PC: 0x%06X)\n",
-                        dsp_read_memory(d->ep.dsp, 'P', 0x0000) & 0x00ffffff,
-                        dsp_get_pc(d->ep.dsp));
-                detected = true;
+        if (reset_vec != 0 && reset_vec != 0x00cacaca) {
+            if (reset_vec != 0x000086) {
+                static bool detected = false;
+                if (!detected) {
+                    fprintf(stderr,
+                            "[EP LITMUS] Guest DMA Detected! Reset vector P:0x0000 = 0x%06X (PC: 0x%06X)\n",
+                            reset_vec, dsp_get_pc(d->ep.dsp));
+                    detected = true;
+                }
             }
 
             dsp_start_frame(d->ep.dsp);
@@ -667,8 +672,8 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
             }
             g_dbg.ep.cycles = dsp_get_cycle_count(d->ep.dsp);
         }
-    } else if (ep_enabled) {
-        if (d->ep_frame_div % 8 == 0) {
+
+        if (!d->is_5_1_active && (d->ep_frame_div % 8 == 0)) {
             ep_drain_output_fifo0(d);
         }
     }
