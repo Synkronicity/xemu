@@ -219,7 +219,7 @@ static bool ep_sink_samples(MCPXAPUState *d, uint8_t *ptr, size_t len)
         return false;
     } else if ((d->monitor.point == MCPX_APU_DEBUG_MON_EP) ||
         (d->monitor.point == MCPX_APU_DEBUG_MON_GP_OR_EP)) {
-        assert(len <= sizeof(d->monitor.frame_buf));
+        assert(len == sizeof(d->monitor.frame_buf));
         if (d->is_5_1_active) {
             memcpy(d->monitor.frame_buf, ptr, len);
         }
@@ -286,30 +286,33 @@ static void ep_fifo_rw(void *opaque, uint8_t *ptr, unsigned int index,
     SET_MASK(d->ep.regs[cur_reg], NV_PAPU_GPOFCUR0_VALUE, cur);
 }
 
-static void ep_drain_fifos(MCPXAPUState *d)
+static void ep_drain_output_fifo0(MCPXAPUState *d)
 {
-    size_t subframe_bytes = NUM_SAMPLES_PER_FRAME * 4;
-    uint8_t dummy_buf[128] = { 0 };
-
-    for (unsigned int i = 0; i < EP_OUTPUT_FIFO_COUNT; i++) {
-        uint32_t base = GET_MASK(d->regs[NV_PAPU_EPOFBASE0 + 0x10 * i],
-                                 NV_PAPU_GPOFBASE0_VALUE);
-        uint32_t end = GET_MASK(d->regs[NV_PAPU_EPOFEND0 + 0x10 * i],
-                                NV_PAPU_GPOFEND0_VALUE);
-        if (end > base) {
-            ep_fifo_rw(d, dummy_buf, i, subframe_bytes, true);
-        }
+    uint32_t base = GET_MASK(d->regs[NV_PAPU_EPOFBASE0], NV_PAPU_GPOFBASE0_VALUE);
+    uint32_t end = GET_MASK(d->regs[NV_PAPU_EPOFEND0], NV_PAPU_GPOFEND0_VALUE);
+    if (end <= base) {
+        return;
     }
 
-    for (unsigned int i = 0; i < EP_INPUT_FIFO_COUNT; i++) {
-        uint32_t base = GET_MASK(d->regs[NV_PAPU_EPIFBASE0 + 0x10 * i],
-                                 NV_PAPU_GPOFBASE0_VALUE);
-        uint32_t end = GET_MASK(d->regs[NV_PAPU_EPIFEND0 + 0x10 * i],
-                                NV_PAPU_GPOFEND0_VALUE);
-        if (end > base) {
-            ep_fifo_rw(d, dummy_buf, i, subframe_bytes, false);
-        }
+    uint32_t cur = GET_MASK(d->regs[NV_PAPU_EPOFCUR0], NV_PAPU_GPOFCUR0_VALUE);
+    if (cur >= end) {
+        cur = cur % (end - base);
     }
+    if (cur < base) {
+        cur = base;
+    }
+
+    uint8_t temp_buf[sizeof(d->monitor.frame_buf)];
+    size_t len = sizeof(d->monitor.frame_buf);
+
+    cur = circular_scatter_gather_rw(d,
+        d->regs[NV_PAPU_EPFADDR], d->regs[NV_PAPU_EPFMAXSGE],
+        temp_buf, base, end, cur, len, false);
+
+    SET_MASK(d->regs[NV_PAPU_EPOFCUR0], NV_PAPU_GPOFCUR0_VALUE, cur);
+    SET_MASK(d->ep.regs[NV_PAPU_EPOFCUR0], NV_PAPU_GPOFCUR0_VALUE, cur);
+
+    ep_sink_samples(d, temp_buf, len);
 }
 
 static void proc_rst_write(DSPState *dsp, uint32_t oldval, uint32_t val)
@@ -664,14 +667,10 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
             }
             g_dbg.ep.cycles = dsp_get_cycle_count(d->ep.dsp);
         }
-    } else {
-        /*
-         * When dolby_ep.bin is absent or EP DSP stepping is bypassed (e.g. in
-         * stereo fallback or unbooted state), unconditionally drain and advance
-         * the EP FIFO pointers every subframe tick so that guest dsound.sys
-         * never stalls waiting on full/unserviced FIFOs.
-         */
-        ep_drain_fifos(d);
+    } else if (ep_enabled) {
+        if (d->ep_frame_div % 8 == 0) {
+            ep_drain_output_fifo0(d);
+        }
     }
 }
 
