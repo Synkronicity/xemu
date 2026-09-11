@@ -29,6 +29,7 @@
 #include "debug.h"
 #include "trace.h"
 #include "dsp.h"
+#include "ep_yrom.h"
 
 #define BITMASK(x)  ((1<<(x))-1)
 
@@ -907,6 +908,14 @@ static void dsp_postexecute_interrupts(dsp_core_t* dsp)
  *  Read/Write memory functions
  **********************************/
 
+static inline bool dsp_core_is_gp(dsp_core_t *dsp)
+{
+    if (dsp->opaque) {
+        return ((DSPState *)dsp->opaque)->is_gp;
+    }
+    return dsp->is_gp;
+}
+
 static uint32_t read_memory_p(dsp_core_t* dsp, uint32_t address)
 {
     assert((address & 0xFF000000) == 0);
@@ -914,6 +923,18 @@ static uint32_t read_memory_p(dsp_core_t* dsp, uint32_t address)
     uint32_t r = ldl_le_p(&dsp->pram[address]);
     assert((r & 0xFF000000) == 0);
     return r;
+}
+
+static uint32_t read_memory_y(dsp_core_t* dsp, uint32_t address)
+{
+    assert((address & 0xFF000000) == 0);
+    if (!dsp_core_is_gp(dsp)) {
+        if (address >= 0x0800 && address <= 0x0FFF) {
+            return ep_yrom[address - 0x0800] & 0x00FFFFFF;
+        }
+    }
+    assert(address < DSP_YRAM_SIZE);
+    return dsp->yram[address];
 }
 
 uint32_t dsp56k_read_memory(dsp_core_t* dsp, int space, uint32_t address)
@@ -939,8 +960,7 @@ uint32_t dsp56k_read_memory(dsp_core_t* dsp, int space, uint32_t address)
             }
         }
     } else if (space == DSP_SPACE_Y) {
-        assert(address < DSP_YRAM_SIZE);
-        return dsp->yram[address];
+        return read_memory_y(dsp, address);
     } else if (space == DSP_SPACE_P) {
         return read_memory_p(dsp, address);
     } else {
@@ -979,6 +999,10 @@ static void write_memory_raw(dsp_core_t* dsp, int space, uint32_t address, uint3
             dsp->xram[address] = value;
         }
     } else if (space == DSP_SPACE_Y) {
+        if (!dsp_core_is_gp(dsp) && address >= 0x0800 && address <= 0x0FFF) {
+            /* EP on-chip Y data ROM (read-only factory ROM) - drop write */
+            return;
+        }
         assert(address < DSP_YRAM_SIZE);
         dsp->yram[address] = value;
     } else if (space == DSP_SPACE_P) {
