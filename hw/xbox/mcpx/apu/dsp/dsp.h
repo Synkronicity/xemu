@@ -32,36 +32,11 @@
 #include "dsp_dma.h"
 
 typedef struct DSPState DSPState;
-
-typedef struct DSPOps {
-    void (*finalize)(DSPState *dsp);
-    void (*reset)(DSPState *dsp);
-    void (*step)(DSPState *dsp);
-    void (*run)(DSPState *dsp, int cycles);
-    void (*bootstrap)(DSPState *dsp);
-    void (*start_frame)(DSPState *dsp);
-    uint32_t (*read_memory)(DSPState *dsp, char space, uint32_t addr);
-    void (*write_memory)(DSPState *dsp, char space, uint32_t addr,
-                         uint32_t value);
-    bool (*get_halt_requested)(DSPState *dsp);
-    void (*set_halt_requested)(DSPState *dsp, bool idle);
-    uint32_t (*get_cycle_count)(DSPState *dsp);
-    void (*set_cycle_count)(DSPState *dsp, uint32_t count);
-    uint32_t (*get_pc)(DSPState *dsp);
-    void (*invalidate_opcache)(DSPState *dsp);
-    void (*sync_to_vm)(DSPState *dsp);
-    void (*sync_from_vm)(DSPState *dsp);
-} DSPOps;
+typedef struct dsp_core_s dsp_core_t;
 
 /*
  * Shared VM state for save/load and backend synchronization.
- * Both the C interpreter and JIT backends sync to/from this struct.
- *
- * TODO: This struct mirrors the old C interpreter's dsp_core_t layout for
- * snapshot compatibility. It uses 16-bit interrupt fields and only 4 interrupt
- * slots, losing fidelity when saving JIT state (which has 24-bit addresses and
- * 128 IVT slots). Once the C interpreter is removed, simplify this to match
- * the JIT's native state and bump the vmstate version.
+ * The C interpreter core syncs to/from this struct for QEMU VMState snapshots.
  */
 typedef struct DspCoreState {
     uint32_t pc;
@@ -95,7 +70,7 @@ typedef struct DspCoreState {
 } DspCoreState;
 
 struct DSPState {
-    const DSPOps *ops;
+    dsp_core_t *c_core;
 
     DspCoreState core;
     DSPDMAState dma;
@@ -112,8 +87,6 @@ struct DSPState {
     uint32_t hotx;
 
     bool is_gp;
-
-    void *backend;
 };
 
 DSPState *dsp_init(void *rw_opaque, dsp_scratch_rw_func scratch_rw,
@@ -147,8 +120,5 @@ void dsp_invalidate_opcache(DSPState *dsp);
 /* Backend synchronization - sync backend state to/from DspCoreState */
 void dsp_sync_to_vm(DSPState *dsp);
 void dsp_sync_from_vm(DSPState *dsp);
-
-/* Engine switching */
-void dsp_set_engine(DSPState *dsp, bool use_jit);
 
 #endif /* DSP_H */

@@ -49,7 +49,6 @@ static inline int16_t float_to_s16(float v)
 void mcpx_apu_update_dsp_preference(MCPXAPUState *d)
 {
     static int last_known_dsp_pref = -1;
-    static int last_known_jit_pref = -1;
 
     if (last_known_dsp_pref != (int)g_config.audio.use_dsp) {
         if (g_config.audio.use_dsp) {
@@ -62,12 +61,6 @@ void mcpx_apu_update_dsp_preference(MCPXAPUState *d)
             d->ep.realtime = false;
         }
         last_known_dsp_pref = g_config.audio.use_dsp;
-    }
-
-    if (last_known_jit_pref != (int)g_config.audio.use_dsp_jit) {
-        dsp_set_engine(d->gp.dsp, g_config.audio.use_dsp_jit);
-        dsp_set_engine(d->ep.dsp, g_config.audio.use_dsp_jit);
-        last_known_jit_pref = g_config.audio.use_dsp_jit;
     }
 }
 

@@ -852,8 +852,6 @@ void MainMenuAudioView::Draw()
     SectionTitle("Quality");
     Toggle("Real-time DSP processing", &g_config.audio.use_dsp,
            "Enable improved audio accuracy (experimental)");
-    Toggle("DSP JIT engine", &g_config.audio.use_dsp_jit,
-           "Use DSP JIT engine");
 
     SectionTitle("Firmware");
     FilePicker("DSP EP ROM", g_config.sys.files.ep_rom_path,
