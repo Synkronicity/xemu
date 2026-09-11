@@ -28,6 +28,7 @@
 #include "dsp_cpu.h"
 #include "debug.h"
 #include "trace.h"
+#include "dsp.h"
 
 #define BITMASK(x)  ((1<<(x))-1)
 
@@ -397,6 +398,11 @@ void dsp56k_reset_cpu(dsp_core_t* dsp)
 
     /* Misc */
     dsp->loop_rep = 0;
+    dsp->is_idle = false;
+    dsp->cycle_count = 0;
+    if (dsp->opaque) {
+        dsp_set_halt_requested((DSPState *)dsp->opaque, false);
+    }
 
 
     /* runtime shit */
@@ -758,6 +764,11 @@ void dsp56k_add_interrupt(dsp_core_t* dsp, uint16_t inter)
     if (dsp->interrupt_is_pending[inter] == 0) {
         dsp->interrupt_is_pending[inter] = 1;
         dsp->interrupt_counter ++;
+    }
+
+    dsp->is_idle = false;
+    if (dsp->opaque) {
+        dsp_set_halt_requested((DSPState *)dsp->opaque, false);
     }
 }
 

@@ -21,6 +21,8 @@
 
 #include "hw/xbox/mcpx/apu/apu_int.h"
 
+#define EP_SUBFRAME_CYCLES 12800
+
 static const int16_t ep_silence[256][2] = { 0 };
 
 void mcpx_apu_update_dsp_preference(MCPXAPUState *d)
@@ -552,11 +554,15 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
 
                 dsp_start_frame(d->ep.dsp);
                 d->ep.dsp->hsr |= DSP_HSR_HRDF;
-                dsp_set_halt_requested(d->ep.dsp, false);
+                int cycle_budget = EP_SUBFRAME_CYCLES;
                 dsp_set_cycle_count(d->ep.dsp, 0);
-                do {
-                    dsp_run(d->ep.dsp, 1000);
-                } while (!dsp_get_halt_requested(d->ep.dsp) && d->ep.realtime);
+                dsp_set_halt_requested(d->ep.dsp, false);
+
+                while (cycle_budget > 0 && !dsp_get_halt_requested(d->ep.dsp)) {
+                    int step_chunk = (cycle_budget > 1000) ? 1000 : cycle_budget;
+                    dsp_run(d->ep.dsp, step_chunk);
+                    cycle_budget -= step_chunk;
+                }
                 g_dbg.ep.cycles = dsp_get_cycle_count(d->ep.dsp);
             }
         }

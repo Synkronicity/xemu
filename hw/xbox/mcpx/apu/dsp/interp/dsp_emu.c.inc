@@ -8046,6 +8046,10 @@ static void emu_rts(dsp_core_t* dsp)
 static void emu_stop(dsp_core_t* dsp)
 {
     DPRINTF("Dsp: STOP instruction\n");
+    dsp->is_idle = true;
+    if (dsp->opaque) {
+        dsp_set_halt_requested((DSPState *)dsp->opaque, true);
+    }
 }
 
 static void emu_sub_x(dsp_core_t* dsp, uint32_t x, uint32_t d)
@@ -8154,6 +8158,10 @@ static void emu_tcc(dsp_core_t* dsp)
 static void emu_wait(dsp_core_t* dsp)
 {
     DPRINTF("Dsp: WAIT instruction\n");
+    dsp->is_idle = true;
+    if (dsp->opaque) {
+        dsp_set_halt_requested((DSPState *)dsp->opaque, true);
+    }
 }
 
 
