@@ -54,7 +54,7 @@ All functional PRs must document verification against real hardware expectations
 
 3. Channel Verification: When modifying audio routing, confirm that Front Left, Front Right, Center, LFE, Surround Left, and Surround Right route cleanly to their expected discrete DirectSound speaker indices.
 
-Use of AI Tooling
+## Use of AI Tooling
 Generative AI and automated reasoning tools are recognized as valid aids for structural scaffolding, regression auditing, and silicon analysis, subject to strict ownership:
 
 1. Total Code Ownership: You are personally responsible for every line of code you submit. You must understand, verify, and be capable of defending the technical logic during review. Unreviewed copy-paste output or hallucinated register shims will be closed immediately.
