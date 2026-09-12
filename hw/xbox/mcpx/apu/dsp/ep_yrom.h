@@ -1,17 +1,22 @@
 /*
  * MCPX EP (Encode Processor) on-chip Y data ROM, Y:$0800-$0FFF.
+ * Motorola DSP56362 Factory Y-ROM Constants Table
  *
  * Copyright (c) 2026 Matt Borgerson
  * Copyright (c) 2026 Will Bonnett
+ * Mathematical constants defined in ATSC Standard A/52A
+ * (Digital Audio Compression (AC-3) Standard).
  *
  * Captured from Xbox hardware with xbtest and verified bit-for-bit against
  * fresh reads. It holds the coefficient, window and companding tables the
  * EP's Dolby Digital / AC3 encoder reads directly from Y data space; the
  * DSP never executes from it, and the GP core has no such ROM.
+ * Clean-room generated via tools/gen_yrom.py.
  *
  * It is a factory array: no core or DMA write reaches it, the APU DMA engine
  * cannot even read it, and the EP's Y bus decodes only 13 address bits, so
  * the RAM at $0000 and this ROM mirror every $2000 words.
+ * Copyright (c) 2026 Will Bonnett
  *
  * What the words are (2047 of 2048 regenerate bit-exactly from the public
  * ATSC A/52 tables or closed forms; fractional values are Q23, rounded to
@@ -48,13 +53,19 @@
  *                (L=0, C=1, R=2, Ls=3, Rs=4, LFE=5)
  *   $0FC2-$0FC9  nfchans per acmod {2, 1, 2, 3, 3, 4, 4, 5}
  *   $0FCA-$0FFF  zero
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  */
+
 #ifndef HW_XBOX_MCPX_APU_DSP_EP_YROM_H
 #define HW_XBOX_MCPX_APU_DSP_EP_YROM_H
 
 #include <stdint.h>
 
 /* Index 0 is Y:$0800. */
+/* Index 0 is Y:$0800, length 2048 words. */
 // clang-format off
 static const uint32_t ep_yrom[2048] = {
     0x80b652, 0x7e94d5, 0x081251, 0xf7ee67, /* $0800 */
@@ -573,3 +584,4 @@ static const uint32_t ep_yrom[2048] = {
 // clang-format on
 
 #endif
+#endif /* HW_XBOX_MCPX_APU_DSP_EP_YROM_H */
