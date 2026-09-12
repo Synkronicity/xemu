@@ -1,58 +1,13 @@
 /*
- * MCPX EP (Encode Processor) on-chip Y data ROM, Y:$0800-$0FFF.
  * Motorola DSP56362 Factory Y-ROM Constants Table
  *
- * Copyright (c) 2026 Matt Borgerson
- * Copyright (c) 2026 Will Bonnett
  * Mathematical constants defined in ATSC Standard A/52A
  * (Digital Audio Compression (AC-3) Standard).
  *
- * Captured from Xbox hardware with xbtest and verified bit-for-bit against
- * fresh reads. It holds the coefficient, window and companding tables the
- * EP's Dolby Digital / AC3 encoder reads directly from Y data space; the
- * DSP never executes from it, and the GP core has no such ROM.
  * Clean-room generated via tools/gen_yrom.py.
  *
- * It is a factory array: no core or DMA write reaches it, the APU DMA engine
- * cannot even read it, and the EP's Y bus decodes only 13 address bits, so
- * the RAM at $0000 and this ROM mirror every $2000 words.
  * Copyright (c) 2026 Will Bonnett
  *
- * What the words are (2047 of 2048 regenerate bit-exactly from the public
- * ATSC A/52 tables or closed forms; fractional values are Q23, rounded to
- * nearest, Y:$091D is 1 LSB low at a rounding tie):
- *
- *   $0800-$08AB  33 biquads, 5 words each (a1/2, a2, b0, b1/2, b2):
- *                4 sections: 8th-order 125 Hz LFE lowpass;
- *                9 x 3 sections: 6th-order bandwidth lowpasses, -3 dB at
- *                14.0 .. 22.8 kHz in ~1.1 kHz steps (48 kHz);
- *                2 sections: 4th-order ~8 kHz transient-detector highpass.
- *   $089B-$08A1  seven constants 0.1456 + 0.08303 m, m = 6,4,2,0,5,3,1
- *   $08AC-$08AE  transient thresholds 0.1, 0.075, 0.05 (A/52 7.1.2)
- *   $08AF-$08B1  0.4, 0.25, 0.15 (a second threshold set; unidentified)
- *   $08B2-$09B1  MDCT window: KBD, alpha 5, N 512, first half, full precision
- *   $09B2-$0AB1  MDCT-512 twiddles -cos, -sin(2 pi (8n+1) / 4096), n < 128
- *   $0AB2-$0B31  MDCT-256 twiddles -cos, -sin(2 pi (8n+1) / 2048), n < 64
- *   $0B32-$0C03  latstab, i = 0..209, trunc(10 log10(1 + 10^(-0.09375 i/10))
- *                * 128 / 6) (A/52 Table 7.20, 6 dB per step exactly)
- *   $0C04-$0C1B  fastdec, slowdec, fastgain, slowgain, dbpbtab (A/52 7.24-7.28)
- *   $0C1C-$0CB1  hth for 48, 44.1, 32 kHz, 50 each (A/52 Table 7.22)
- *   $0CB2-$0CB9  floortab, 0xf800 sign-extended (A/52 Table 7.29)
- *   $0CBA-$0CF9  baptab (A/52 Table 7.23)
- *   $0CFA-$0D09  bits per mantissa by bap (A/52 Table 7.18)
- *   $0D0A-$0D11  mantissa group multipliers {9,3,1}, {25,5,1}, {11,1}
- *   $0D12-$0E11  CRC-16 byte table, poly 0x8005, MSB first
- *   $0E12-$0F11  backward CRC step table, T[n] = n(x) x^-8 mod P (x^-8 = 0x7F81)
- *   $0F12-$0F15  exponent-strategy group sizes {0, 1, 2, 4}
- *   $0F16-$0F19  {0, 0x800000, 0xC00000, 0xE00000} (per strategy; unidentified)
- *   $0F1A-$0F4B  band end edges bndtab[k+1], k = 0..49 (A/52 7.2.2.3)
- *   $0F4C-$0F51  frame size in words at 640 kbps per fscod (A/52 Table 5.18)
- *   $0F52-$0F91  FFT-128 twiddles (-cos, +sin)(2 pi k/128), k in 5-bit
- *                bit-reversed order
- *   $0F92-$0FC1  per-acmod channel slot lists, 8 x 6, -1 terminated
- *                (L=0, C=1, R=2, Ls=3, Rs=4, LFE=5)
- *   $0FC2-$0FC9  nfchans per acmod {2, 1, 2, 3, 3, 4, 4, 5}
- *   $0FCA-$0FFF  zero
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
@@ -64,7 +19,6 @@
 
 #include <stdint.h>
 
-/* Index 0 is Y:$0800. */
 /* Index 0 is Y:$0800, length 2048 words. */
 // clang-format off
 static const uint32_t ep_yrom[2048] = {
@@ -583,5 +537,4 @@ static const uint32_t ep_yrom[2048] = {
 };
 // clang-format on
 
-#endif
 #endif /* HW_XBOX_MCPX_APU_DSP_EP_YROM_H */
