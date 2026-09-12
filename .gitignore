@@ -26,3 +26,8 @@ build.log
 /macos-libs/
 /macos-pkgs/
 /xemu.iconset/
+
+# Ignore Meson wrap extraction directories while keeping wrap files
+subprojects/*/
+!subprojects/*.wrap
+!subprojects/*.patch

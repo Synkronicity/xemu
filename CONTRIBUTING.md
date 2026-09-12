@@ -1,116 +1,67 @@
-# Contributing to xemu
+# Contributing to xemu-dsp56362
 
-Thank you for your interest in contributing to xemu! xemu is an open-source, cross-platform original Xbox emulator built on top of QEMU. Contributions from the community help make xemu more accurate, performant, and accessible.
+`xemu-dsp56362` is an independent, sovereign downstream fork of Xemu dedicated to bit-accurate Low-Level Emulation (LLE) of the Motorola Symphony DSP56362 Encoding Processor (EP) and discrete 5.1 multi-channel audio preservation.
 
-Please take a moment to review this guide before submitting issues or pull requests.
-
----
-
-## Code of Conduct & Civility
-
-We are committed to providing a friendly, safe, and welcoming environment for everyone, regardless of experience level, background, or identity.
-
-- **Be respectful and civil**: Treat other contributors, maintainers, and users with kindness and patience. Technical disagreements are normal and expected, but discussions must remain constructive and focused on the code and design.
-- **Unacceptable behavior**: Personal attacks, trolling, insults, harassment, exclusionary comments, and disrespectful conduct will not be tolerated.
-- **Reference**: For more details, see [docs/devel/code-of-conduct.rst](docs/devel/code-of-conduct.rst).
+We welcome clean, well-tested contributions that advance hardware accuracy, audio fidelity, and platform portability.
 
 ---
 
-## Getting Started & Communicating
+## Architectural Principles & Scope
 
-### Reporting Bugs & Requesting Features
-- Search existing [GitHub Issues](https://github.com/xemu-project/xemu/issues) to verify that your problem or proposal has not already been reported.
-- When opening a new issue, choose the appropriate issue template (Bug Report, Title Compatibility, or Feature Request) and fill in all requested information, including logs, system specifications, and reproduction steps.
+Contributions touching the APU, audio pipeline, or core emulator must conform to these architectural boundaries:
 
-### Discuss Major Changes First
-If you are planning a significant new feature, major architectural refactor, or complex hardware subsystem rewrite, **please discuss it first with maintainers on the xemu Discord**. Discussing your proposed approach ahead of time helps ensure that effort aligns with project goals, fits into current architecture plans, and avoids wasted time on changes that may not be mergeable.
-
----
-
-## Pull Request Guidelines
-
-### Check for Existing PRs & Avoid Duplicate Work
-Before starting work or submitting a pull request, **always check open pull requests** to avoid duplicating effort or duplication of work that is already underway.
-- **Collaborate first**: If an open PR already touches the same issue or subsystem, please reach out and attempt to collaborate with the other PR author before creating a competing PR.
-- **Acknowledge and justify overlapping PRs**: If there is genuine reason to open a separate PR that overlaps with an existing one (e.g., the original PR has been abandoned), please link to the existing PR, acknowledge the duplication, and provide clear reasoning in your PR description.
-
-### Workflow
-1. **Check for Existing Work**: Ensure no existing PR is already addressing your change (as described above).
-2. **Fork and Branch**: Fork the repository on GitHub and create a descriptive feature branch from `master`.
-3. **Keep PRs Focused**: Each pull request should address a single bug fix, improvement, or feature. Avoid bundling unrelated changes, refactorings, or formatting updates into a single PR.
-4. **Keep Branches Up-to-Date**: Rebase your branch onto the latest upstream `master` branch before submitting and when requested during review.
-5. **CI Checks**: Ensure your code builds cleanly and passes all automated GitHub Actions checks. Note that first time contributors may need a maintainer to enable the tests; you may wish to run them yourself via a mock PR against your own repository.
-
----
-
-## Testing & Validation Requirements
-
-All proposed changes must be thoroughly tested before submitting a pull request.
-
-- **Automated & Unit Tests**: Ensure existing tests pass, and add new unit tests when adding new logic or helper utilities where feasible.
-- **Test XBEs for Hardware Parity**: When submitting changes intended to match original Xbox hardware behavior, providing a test XBE is strongly encouraged. These should be structured to allow execution on original Xbox hardware as well as xemu to facilitate direct comparison of the results.
-- **Manual testing**: In cases where automated tests are unusually challenging, please perform manual testing on as many platforms as possible. Be sure to include instructions capturing how to test the change in your PR description.
-
-Providing test cases or test XBEs enables reviewers to independently reproduce and validate the change and allows the test to be integrated into automated regression testing suites to guard against future regressions.
-
----
-
-## Commit Message Conventions
-
-Commit messages are an important part of the project history and documentation. xemu follows a structured commit message format:
-
-```text
-<subsystem>: <short description>
-
-[optional detailed body explaining why the change was made]
-```
-
-### Subject Line
-- Format: `<subsystem>: <short description>`
-- Write in the imperative mood (e.g., `nv2a: Fix texture cache invalidation` rather than `nv2a: Fixed...` or `nv2a: Fixes...`).
-- Keep the subject line concise (aim for ~50–72 characters).
-
-> [!TIP]
-> When in doubt about which subsystem prefix to use or how to structure your commit message, run `git log` on the file or subsystem you modified:
-> ```bash
-> git log -n 5 path/to/modified/file
-> ```
-
-### Message Body
-- Separate the subject line from the body with a blank line.
-- Use the body to explain why the change is necessary, what hardware behavior or quirk was observed, references to documentation or hardware test results, and any trade-offs or technical decisions made.
-- For non-trivial changes, a detailed body is strongly encouraged.
+1. **Pure C Engine**: The DSP56300/DSP56362 execution core is strictly implemented in ISO C (C99/C11). Do not introduce Rust toolchain dependencies, foreign function interfaces (FFI), C++ templates, or runtime JIT compilers into the DSP subsystem.
+2. **Lossless Direct Tap**: Multi-channel surround is tapped directly from the internal DSP mixer aperture into discrete 6-channel 32-bit floating-point LPCM (`surround_buf`). Pull requests attempting to revert the audio pipeline to lossy AC-3 bitstream encoding, virtual S/PDIF ring buffers, or host `liba52` round-trips will be rejected.
+3. **Silicon Accuracy & Memory Layout**:
+   - **P-RAM Aperture**: 32,768 words ($0x8000$) backing the full 64 KB `NV_PAPU_EPPMEM` hardware window.
+   - **Data Precision**: 24-bit word packing (`& 0x00FFFFFF`) across all ALU, AGU, and peripheral registers.
+   - **Bit-14 DMA Hole**: Memory transactions addressing bit 14 (`addr & 0x4000`) target unmapped hardware space (reads return `0x000000`, writes are discarded).
+   - **Y-ROM Isolation**: The factory Y-ROM table ($Y:\$0800$–$Y:\$0FFF$) is read-only public domain ATSC A/52 mathematical constants generated via `tools/gen_yrom.py`.
+4. **Subframe Budgeting**: Execution steps must respect the 128 µs subframe budget (`EP_SUBFRAME_CYCLES 12800`). Never introduce unbounded execution loops that block the QEMU main event thread.
 
 ---
 
 ## Code Style & Standards
 
-- **(Mostly) follow the QEMU guidelines**: Generally xemu code follows [QEMU style](docs/devel/style.rst) with the following notable exceptions.
-    - Variable declarations are NOT required to be at the top of the block. Allowing declarations at point of use makes it easier to understand types when dealing with longer functions.
-    - C++ style comments (`//`) are allowed where it aids readability (and conforms to the comment use convention below).
-- **Auto Format Newly Added Files**: The use of `clang-format` is **required** for all newly added files.
-- **Modifying Existing Files**: When modifying existing files, changes should match the local style of the file.
-- **No Unrelated Style Changes in Functional PRs**: Stylistic changes (reformatting, renaming, whitespace adjustments) that are unrelated to functionality changes **must be made in a separate PR**, unless discussed and agreed upon on the xemu Discord ahead of time. Mixing style changes with bug fixes or features complicates code reviews, obscures git history, and increases merge conflicts.
-- **Comment Tricky Code Only**: Comments should be reserved for code that is not self-explanatory. Remember that comments add maintenance burden; if someone changes the code and forgets to update the comment it becomes difficult to determine the actual intent.
+- **Language**: Strict C99/C11 for emulator core and subsystems; modern C++ (C++17) only where interacting with existing UI code (`ui/xui/`).
+- **Formatting**: Run `clang-format` on all new or modified C/C++ files. Changes should match the local style of the target file without introducing unrelated whitespace churn.
+- **Build System**: All code must build cleanly via Meson and Ninja orchestrated by `./build.sh` (or `build.sh -p win64-cross` under Docker). Do not commit raw Makefiles, CMake lists, or IDE-specific project files.
 
 ---
 
-## Use of AI Tooling
+## Commit Message Standards
 
-Generative AI tools (such as GitHub Copilot, ChatGPT, Claude, Gemini, and similar LLM-based assistants) are generally permitted as aids in writing code and documentation. However, there are some common-sense requirements:
+Commit messages must be concise, descriptive, and follow the structured format:
 
-1. **You must understand the code**: You are personally responsible for every line of code you propose. You must thoroughly read, understand, verify, and test all AI-generated code before submitting it.
-2. **No unreviewed AI output**: Submitting blindly copied, unverified, or hallucinated AI output ("AI slop") is strictly forbidden - please don't waste maintainers' limited review time or your token budget.
-3. **Active ownership and review participation**: You must be willing and technically capable of guiding your pull request through the entire review process. This includes answering technical questions, explaining architectural decisions, and making necessary adjustments based on reviewer feedback. If you cannot explain or defend the code you submitted, the PR will not be accepted. Note that this does not mean simply acting as a proxy for your chatbot.
+```text
+<subsystem>: <short imperative summary>
 
-Please also note which model or models were used in the creation of your PR. This is useful for review purposes and to guide other contributors towards models that have been shown to be successful.
+[detailed technical explanation of hardware behavior, register state, or bug fix]
 
----
+apu/dsp: implement multiple wrap-around agu addressing for m0 register
 
-## The Review Process & Expectations
+monitor/sdl: scale buffer drain watermarks to prevent 5.1 stream starvation
 
-Please be aware of the following regarding code reviews:
+ci: update linux appimage packaging script for llvm-21 toolchain
+```
 
-- **Reviews take time**: The review process can be quite long, often on the order of months. Emulation development is complex and demanding. A seemingly innocuous change can break dozens of games, often in subtle ways. In addition, xemu maintainers are unpaid volunteers who are donating their limited free time to the project.
-- **Feedback & Iteration**: Code review comments are aimed at maintaining the quality and long-term maintainability of the project. Please remain receptive to feedback and prepared to update your changes as needed.
-- **Patience is appreciated**: Please do not repeatedly ping reviewers.
+## Testing & Validation
+All functional PRs must document verification against real hardware expectations or retail game titles:
+
+1. Compilation: Clean compilation under GCC or Clang without new compiler warnings.
+
+2. Frame Pacing: Verification that title audio does not cause subframe dropouts, audio thread deadlocks, or dsound.sys timeout spinloops (locked 60 FPS performance).
+
+3. Channel Verification: When modifying audio routing, confirm that Front Left, Front Right, Center, LFE, Surround Left, and Surround Right route cleanly to their expected discrete DirectSound speaker indices.
+
+Use of AI Tooling
+Generative AI and automated reasoning tools are recognized as valid aids for structural scaffolding, regression auditing, and silicon analysis, subject to strict ownership:
+
+1. Total Code Ownership: You are personally responsible for every line of code you submit. You must understand, verify, and be capable of defending the technical logic during review. Unreviewed copy-paste output or hallucinated register shims will be closed immediately.
+
+2. Transparency: If a non-trivial patch was co-authored or audited using AI tools, state the model and methodology in the PR description or append an entry to AI_DISCLOSURE_LOG.md.
+
+## Communication & Governance
+- Technical discussions, bug reports, and PR reviews occur exclusively on GitHub (Issues, Discussions, and Pull Requests). We do not funnel review processes through external chat servers.
+
+- Reviews prioritize technical rigor, hardware parity, and reproducible stability. If a patch works, passes CI, and adheres to our architectural boundaries, it will be merged efficiently.
