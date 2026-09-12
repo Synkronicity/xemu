@@ -32,7 +32,7 @@ jobs:
             -w /xemu \
             -e CCACHE_DIR=/xemu/ccache \
             ghcr.io/xemu-project/xemu-win64-toolchain:latest \
-            bash -c "apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && ./build.sh -p win64-cross"
+            bash -c "apt-get update && apt-get install -y --no-install-recommends curl ca-certificates python3-requests && ./build.sh -p win64-cross"
 
       - name: Stage Windows Artifact
         run: |

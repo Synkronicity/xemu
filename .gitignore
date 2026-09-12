@@ -35,5 +35,5 @@ subprojects/*/
 projectlog.md
 recon_phase66.md
 tools/bench_ep.exe
-tools/dolby_ep.bin
-tools/ep_harness.exebuild/
+tools/dolby_ep.bino
+tools/ep_harness.exe
