@@ -1,51 +1,68 @@
-# Instructions for Autonomous Agents & AI Assistants
+# Operational Directives for Autonomous Agents & AI Assistants
 
-This file provides mandatory instructions and guidelines for autonomous AI agents, coding assistants, and models contributing code or creating pull requests for the xemu project.
-
----
-
-## 1. Strict Adherence to Project Standards
-
-All contributions must strictly comply with the guidelines defined in [CONTRIBUTING.md](CONTRIBUTING.md).
+This repository (`xemu-dsp56362`) is a sovereign, performance-critical low-level emulator fork. Autonomous agents, LLMs, and assistive tooling operating on this codebase must adhere strictly to these architectural invariants, scoping constraints, and verification protocols.
 
 ---
 
-## 2. Mandatory Agent Declarations
+## 1. Architectural Invariants (Hard Non-Negotiables)
 
-When submitting code or opening a pull request generated with or assisted by an agent:
+When authoring or refactoring code in the APU, DSP, or core emulation subsystems, agents must observe the following technical constraints:
 
-1. **PR Description Declaration**:
-   - The pull request description **must** include an explicit declaration stating which AI agent and model were used to generate or assist with the change.
-   - Example:
-     ```markdown
-     > **Agent Declaration**: This pull request was created with assistance from [Agent Name / Model Name].
-     ```
-
----
-
-## 3. Scoping & Granularity Guidelines
-
-To produce high-quality, easily reviewable pull requests, agents must observe the following constraints:
-
-- **Single Responsibility**: Each pull request must address exactly one bug fix, hardware improvement, or specific feature. Never bundle multiple independent bug fixes, features, or cleanups into a single commit or pull request. Break independent changes into separate, logically sequenced PRs.
-- **Minimal Change**: Touch only the files and lines necessary to accomplish the stated task. Do not refactor surrounding functions or reorganize include headers unless explicitly requested.
-- **Verify Against Upstream**: Always ensure the branch is rebased on the latest upstream `master` and that changes do not stomp on or duplicate existing open PRs.
+* **Language Boundary**: Pure ISO C (C99/C11) for all emulation cores, DSP execution paths, and APU routing. Never introduce C++ classes, templates, STL containers, or external language runtimes (e.g., Rust, JIT emitters) into `hw/xbox/mcpx/apu/`. C++ (C++17) is restricted exclusively to UI layers (`ui/xui/`).
+* **Direct Lossless Audio Pipeline**: Multi-channel surround is tapped directly from internal mixer RAM into discrete 6-channel 32-bit floating-point LPCM (`surround_buf`). Never generate or suggest virtual S/PDIF packetization, AC-3 bitstream encoding, or host `liba52` round-trips.
+* **Front Soundstage Summing**: Master GP 2D stereo buffers (`0x1400` / `0x1420`) must remain additively summed with 3D mixbins into Front-Left (Channel 0) and Front-Right (Channel 1) to prevent missing FMV, cutscene, or menu audio.
+* **Silicon Memory Layout**:
+  - **P-RAM**: Strictly 32,768 words (`0x8000` / `DSP_PRAM_SIZE`) mirroring the 64 KB `NV_PAPU_EPPMEM` hardware window.
+  - **Word Packing**: All DSP arithmetic, AGU pointers, and register reads/writes must maintain 24-bit masking (`& 0x00FFFFFF`). Never truncate intermediate AGU calculations to 16 bits.
+  - **Bit-14 DMA Hole**: Addresses where `(addr & 0x4000) != 0` represent an unmapped zero-generator aperture. Reads return `0x000000`; writes are silently dropped.
+  - **Factory Y-ROM**: Addresses `Y:0x0800`–`Y:0x0FFF` represent read-only public domain ATSC A/52 mathematical tables generated via `tools/gen_yrom.py`. Core writes must be discarded.
+* **Bounded Subframe Budget**: DSP stepping must run in bounded chunks under `EP_SUBFRAME_CYCLES` (12,800 cycles / 128 µs). Opcode `WAIT` (`0x000086`) must assert `is_idle = true` and immediately yield control back to the host QEMU event loop. Never write unbounded `while (!halt)` loops.
 
 ---
 
-## 4. Verification & Testing
+## 2. Scoping Discipline & Code Hygiene
 
-- **Compilation**: Verify that all modified files compile without warnings or errors.
-- **Emulation Accuracy**: Do not hallucinate register definitions, bitfields, or hardware behaviors. Cross-reference existing implementations under `hw/xbox/` or verified hardware documentation.
-- **Test Coverage & Parity**: Whenever altering hardware emulation (NV2A, APU/DSP, MCPX, memory controller, etc.), provide or suggest a test XBE that can be run on both bare-metal Xbox hardware and xemu to validate behavior.
+To ensure clean diffs and maintain git bisectability:
+
+* **Zero Unrelated Churn**: Touch only the specific functions and files directly required to fulfill the task. Do not perform drive-by reformatting, aesthetic whitespace adjustments, or include reorganization in functional commits.
+* **Preserve Licensing & Attributions**: Never delete, truncate, or reword top-level copyright comment blocks. When introducing new components or completing major rewrites, append attribution cleanly in accordance with `CONTRIBUTING.md`.
+* **No Speculative Shims**: Never stub unimplemented MMIO registers or DSP opcodes with arbitrary dummy constants unless explicitly guided by verified hardware behavior or official family manuals. If behavior is unmapped, log a rate-limited warning and fail safely.
 
 ---
 
-## 5. Agent Pre-Submission Checklist
+## 3. Build & Verification Protocol
 
-Before finalizing any commit or pull request, ensure:
-- [ ] Commit message uses `<subsystem>: <short description>` followed by a detailed explanatory body.
-- [ ] `clang-format` is applied to new files, and existing code style is respected.
-- [ ] No unrelated formatting or refactoring changes are included.
-- [ ] The pull request description includes the agent/model declaration.
-- [ ] Existing open pull requests have been searched to avoid duplicating work.
+Agents must assume the build environment uses Meson and Ninja via the repository build scripts:
+
+* **Primary Build**: `./build.sh` (MSYS2 MinGW-w64 on Windows) or `./build.sh -p win64-cross` (Linux Docker cross-compilation).
+* **Incremental Verification**: `ninja -C build`
+* **Syntax & Formatting**: Run `clang-format` on newly authored C/C++ files. Ensure all text files retain Unix LF line endings.
+* **Parity Validation**: When modifying `tools/gen_yrom.py`, verify that executing `python3 tools/gen_yrom.py` emits an `ep_yrom.h` that matches 2,048 words with identical MD5/binary parity.
+
+---
+
+## 4. Commit Message Standard
+
+Format every commit as follows:
+
+```text
+<subsystem>: <imperative summary under 72 chars>
+
+[Detailed explanation of observed bug, hardware register state, and architectural rationale]
+```
+Valid subsystem prefixes: apu/dsp, apu/gp_ep, monitor/sdl, ui/xui, tools, ci, docs.
+
+## 5. Agent Pre-Flight Checklist
+Before proposing or finalizing changes, verify:
+
+- [ ] Language is strict C99/C11 (unless modifying ui/xui/).
+
+- [ ] No Rust or JIT dependencies are referenced.
+
+- [ ] 24-bit packing (0x00FFFFFF) is applied across all new DSP data/register paths.
+
+- [ ] Bounded cycle budgeting is preserved (no blocking spinloops).
+
+- [ ] Header comment attributions and LF line endings are intact.
+
+- [ ] ./build.sh compiles cleanly without new compiler warnings.
