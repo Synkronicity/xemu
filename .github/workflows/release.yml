@@ -1,72 +1,182 @@
-name: Release
+name: Release Build
 
 on:
-  workflow_call:
-    inputs:
-      ref:
-        description: "Git ref to build and release"
-        required: true
-        type: string
-      tag:
-        description: "Tag name for the release"
-        required: true
-        type: string
-      pre-release:
-        description: "Create as published pre-release instead of draft release"
-        required: false
-        type: boolean
-        default: false
+  push:
+    branches:
+      - master
+    tags:
+      - 'beta*'
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
-  build:
-    name: Build
-    uses: ./.github/workflows/build.yml
-    with:
-      ref: ${{ inputs.ref }}
-
-  delete_prerelease:
-    name: Delete pre-release
-    needs: build
-    if: ${{ inputs.pre-release }}
-    uses: ./.github/workflows/delete-prerelease.yml
-
-  release:
-    name: Create release
+  build-windows:
+    name: Compile Win64 (Docker Cross)
     runs-on: ubuntu-latest
-    needs: [build, delete_prerelease]
-    if: ${{ !cancelled() && needs.build.result == 'success' }}
+
     steps:
-    - name: Clone tree
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
-      with:
-        fetch-depth: 0
-        ref: ${{ inputs.ref }}
-    - name: Generate release notes
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: python3 .github/scripts/gen-changelog.py --ref ${{ inputs.ref }} -o CHANGELOG.md
-    - name: Download artifacts
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
-      with:
-        path: dist
-        merge-multiple: true
-    - name: Add transitionary package aliases
-      if: ${{ !inputs.pre-release }}
-      run: |
-        pushd dist
-        cp xemu-${{ needs.build.outputs.pkg_version }}-windows-x86_64.zip xemu-win-x86_64-release.zip
-        cp xemu-${{ needs.build.outputs.pkg_version }}-windows-arm64.zip xemu-win-aarch64-release.zip
-    - name: Create release
-      uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-      with:
-        name: ${{ inputs.pre-release && 'Latest Development Build' || inputs.tag }}
-        tag_name: ${{ inputs.tag }}
-        target_commitish: ${{ inputs.pre-release && inputs.ref || '' }}
-        body_path: CHANGELOG.md
-        draft: ${{ !inputs.pre-release }}
-        prerelease: ${{ inputs.pre-release }}
-        files: |
-          dist/xemu*.tar.zst
-          dist/xemu*-win*.zip
-          dist/xemu*-macos-universal*.zip
-          dist/xemu*.AppImage
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Cross-Compile Windows Binary
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/xemu \
+            -w /xemu \
+            -e CCACHE_DIR=/xemu/ccache \
+            ghcr.io/xemu-project/xemu-win64-toolchain:latest \
+            bash -c "apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && ./build.sh -p win64-cross"
+
+      - name: Stage Windows Artifact
+        run: |
+          mkdir -p staging
+          cp dist/xemu.exe staging/xemu-win64.exe
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xemu-win64
+          path: staging/xemu-win64.exe
+          retention-days: 7
+
+  build-linux:
+    name: Compile Linux x86_64 AppImage
+    runs-on: ubuntu-22.04
+
+    env:
+      CCACHE_DIR: /tmp/xemu-ccache
+      CCACHE_MAXSIZE: 512M
+      LTO_CACHE_DIR: /tmp/xemu-lto-cache
+      LTO_CACHE_MAXSIZE: 512m
+      DEB_BUILD_MAINT_OPTIONS: optimize=-lto
+      DEB_CFLAGS_MAINT_APPEND: -gdwarf-4 -gstrict-dwarf
+      DEB_CXXFLAGS_MAINT_APPEND: -gdwarf-4 -gstrict-dwarf
+      DEB_LDFLAGS_MAINT_APPEND: -Wl,--build-id=sha1
+      CC: ccache clang-21
+      CXX: ccache clang++-21
+      CC_LD: lld-21
+      CXX_LD: lld-21
+      AR: llvm-ar-21
+      RANLIB: llvm-ranlib-21
+      NM: llvm-nm-21
+      XEMU_BUILD_OPTIONS: --extra-ldflags=-Wl,--thinlto-cache-policy=cache_size_bytes=512m -Db_lto=true -Db_lto_mode=thin -Db_thinlto_cache=true -Db_thinlto_cache_dir=/tmp/xemu-lto-cache -Dx86_version=3
+      APPIMAGE_EXTRACT_AND_RUN: 1
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Add LLVM Repository
+        run: |
+          sudo install -d /etc/apt/keyrings
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo gpg --dearmor -o /etc/apt/keyrings/llvm.gpg
+          sudo tee /etc/apt/sources.list.d/llvm.list <<EOF
+          deb [signed-by=/etc/apt/keyrings/llvm.gpg] http://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main
+          EOF
+
+      - name: Install Dependencies & Clang/LLVM 21
+        shell: bash
+        env:
+          ARCH: amd64
+          POOL: https://apt.llvm.org/jammy/pool/main/l/llvm-toolchain-21/
+        run: |
+          set -euxo pipefail
+          sudo apt-get -qy update
+          sudo apt-get install -y ccache libfuse2 libusb-1.0-0-dev curl
+
+          HTML="$(curl -fsSL --compressed "$POOL")"
+          VER="$(grep -oE 'libllvm21_[0-9][^"]+_${{ env.ARCH }}\.deb' <<<"$HTML" | head -n1 \
+            | sed -E 's/^libllvm21_//; s/_${{ env.ARCH }}\.deb$//')"
+
+          mkdir -p /tmp/llvm21 && cd /tmp/llvm21
+          fetch() {
+            local pkg="$1"
+            curl -fsSLO "${POOL}${pkg}_${VER}_${{ env.ARCH }}.deb"
+          }
+
+          for pkg in \
+            clang-21 clang-tools-21 lld-21 \
+            libllvm21 libclang-cpp21 libclang-common-21-dev libclang1-21 libclang-rt-21-dev \
+            llvm-21 llvm-21-dev llvm-21-linker-tools llvm-21-runtime llvm-21-tools
+          do
+            fetch "$pkg"
+          done
+          sudo apt-get install -y --no-install-recommends ./*.deb
+
+          cd "${{ github.workspace }}"
+          sudo apt-get -qy build-dep .
+
+      - name: Create Debian Changelog
+        run: |
+          echo -e "xemu (1:0.0.0-0) unstable; urgency=medium\n\n  * Release Build\n\n -- xemu-dsp56362 <release@xemu-dsp56362.local>  $(date -R)" > debian/changelog
+
+      - name: Compile Debian Package
+        run: |
+          sudo rm -f /usr/bin/dpkg-genbuildinfo
+          sudo ln -s /bin/true /usr/bin/dpkg-genbuildinfo
+          mkdir -p ${LTO_CACHE_DIR} ${CCACHE_DIR}
+          dpkg-buildpackage --no-sign -b
+          mkdir -p deb
+          mv ../*.deb ../*.ddeb deb/ 2>/dev/null || mv *.deb *.ddeb deb/ 2>/dev/null || true
+
+      - name: Build Standalone AppImage
+        run: |
+          wget --no-verbose https://github.com/linuxdeploy/linuxdeploy/releases/latest/download/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+          ar x deb/xemu_*.deb || ar x deb/*.deb
+          mkdir -p appimage
+          tar -C appimage -xf data.tar*
+          METAFILE=$(find . -name "xemu.metainfo.xml" | head -n1)
+          if [ -n "$METAFILE" ]; then
+            install -DT "$METAFILE" appimage/usr/share/metainfo/xemu.metainfo.xml
+          fi
+          ./linuxdeploy-x86_64.AppImage --output appimage --appdir appimage
+          mkdir -p staging
+          mv xemu-*.AppImage staging/xemu-x86_64.AppImage
+
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xemu-linux
+          path: staging/xemu-x86_64.AppImage
+          retention-days: 7
+
+  publish:
+    name: Publish Release Assets
+    runs-on: ubuntu-latest
+    needs: [build-windows, build-linux]
+    if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/master'
+
+    steps:
+      - name: Download Windows Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: xemu-win64
+          path: release-bins/
+
+      - name: Download Linux Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: xemu-linux
+          path: release-bins/
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Continuous Build' }}
+          prerelease: ${{ startsWith(github.ref, 'refs/tags/beta') }}
+          generate_release_notes: true
+          files: |
+            release-bins/xemu-win64.exe
+            release-bins/xemu-x86_64.AppImage
