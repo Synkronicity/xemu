@@ -178,7 +178,7 @@ void Updater::check_for_update_internal()
 
     try {
         json release = json::parse(std::string((const char *)data->data, data->len));
-        m_release_url = release.value("html_url", "https://github.com/xemu-project/xemu/releases/latest");
+        m_release_url = release.value("html_url", "https://github.com/Synkronicity/xemu-dsp56362/releases/latest");
         m_release_version = release["tag_name"].get<std::string>();
         if (!m_release_version.empty() && m_release_version[0] == 'v') {
             m_release_version = m_release_version.substr(1);
