@@ -136,9 +136,6 @@ class Lib:
         if self.license_lines:
             start, end = self.license_lines
             d = "\n".join(d.splitlines()[start - 1 : end + 1])
-            fname = getattr(self, "cache_path", "license_cache.txt")
-        with open(fname, "w") as f:
-            f.write(d)
         return d
 
     @property
