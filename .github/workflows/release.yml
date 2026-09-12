@@ -26,6 +26,7 @@ jobs:
 
       - name: Cross-Compile Windows Binary
         run: |
+          rm -rf build
           docker run --rm \
             -v ${{ github.workspace }}:/xemu \
             -w /xemu \
@@ -122,6 +123,7 @@ jobs:
 
       - name: Compile Debian Package
         run: |
+          rm -rf build
           sudo rm -f /usr/bin/dpkg-genbuildinfo
           sudo ln -s /bin/true /usr/bin/dpkg-genbuildinfo
           mkdir -p ${LTO_CACHE_DIR} ${CCACHE_DIR}

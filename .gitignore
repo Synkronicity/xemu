@@ -31,3 +31,9 @@ build.log
 subprojects/*/
 !subprojects/*.wrap
 !subprojects/*.patch
+
+projectlog.md
+recon_phase66.md
+tools/bench_ep.exe
+tools/dolby_ep.bin
+tools/ep_harness.exebuild/
