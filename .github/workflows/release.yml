@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - master
+      - feature/*
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - '.nojekyll'
     tags:
       - 'beta*'
       - 'v*'
